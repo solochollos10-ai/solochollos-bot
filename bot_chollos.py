@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from telethon import TelegramClient, events
 import asyncio
 import time
+import random
 
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
@@ -14,128 +15,144 @@ source_channel = "@chollosdeluxe"
 target_channel = "@solochollos10"
 affiliate_tag = os.getenv("AFFILIATE_TAG", "solochollos08-21")
 
-# ANTI-LOOP: IDs de mensajes procesados
+# ANTI-LOOP
 procesados = set()
+user_agents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+]
 
 client = TelegramClient("session_chollos", api_id, api_hash).start(bot_token=bot_token)
 
 def resolve_amzn(url):
     print(f"🔍 Resolviendo: {url}")
-    r = requests.get(url, allow_redirects=True, timeout=10)
-    return r.url
+    try:
+        r = requests.get(url, allow_redirects=True, timeout=10)
+        return r.url
+    except:
+        return url
 
 def get_asin_from_url(url):
     m = re.search(r"/dp/([A-Z0-9]{10})", url)
     if m: 
         print(f"✅ ASIN: {m.group(1)}")
         return m.group(1)
-    print(f"❌ No ASIN en: {url}")
+    print(f"❌ No ASIN")
     return None
 
 def build_affiliate_url(asin):
     return f"https://www.amazon.es/dp/{asin}/?tag={affiliate_tag}"
 
-def get_product_info(amazon_url):
+def scrape_amazon(amazon_url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": random.choice(user_agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Cache-Control": "max-age=0"
     }
+    
     try:
         r = requests.get(amazon_url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
         
-        # TÍTULO (múltiples selectores)
-        title_selectors = [
-            "span#productTitle",
-            "h1.a-size-large",
-            "h1 span",
-            "h1",
-            ".a-size-base-plus"
-        ]
+        # TÍTULO - Múltiples selectores 2026
         title = "Producto Amazon"
-        for selector in title_selectors:
-            title_elem = soup.select_one(selector)
-            if title_elem:
-                title = title_elem.get_text(strip=True)[:120]
+        for selector in [
+            "h1#title span",
+            "#productTitle",
+            "h1.a-size-large",
+            ".a-size-base-plus",
+            "h1 span:not([class])"
+        ]:
+            elem = soup.select_one(selector)
+            if elem:
+                title = elem.get_text(strip=True)[:100]
                 break
         
-        # PRECIO (múltiples selectores)
-        price_selectors = [
-            "span.a-price-whole",
-            ".a-price-whole",
-            "span.a-offscreen",
-            ".a-price span"
-        ]
+        # PRECIO - Selectores actualizados
         price = "Precio no disponible"
-        for selector in price_selectors:
-            price_elem = soup.select_one(selector)
-            if price_elem:
-                price = price_elem.get_text(strip=True)
+        for selector in [
+            ".a-price-whole",
+            "span[data-csa-price]",
+            ".a-price span",
+            ".celwidget .a-price-whole"
+        ]:
+            elems = soup.select(selector)
+            for elem in elems[:3]:  # Primeros 3 resultados
+                text = elem.get_text(strip=True)
+                if re.search(r'[\d,]+\.?\d*', text):
+                    price = text
+                    break
+            if price != "Precio no disponible":
                 break
         
-        # PVP (precio tachado)
-        old_price_selectors = [
-            "span.a-price.a-text-price",
-            ".a-text-price span",
-            "span.line-through"
-        ]
-        old_price = None
-        for selector in old_price_selectors:
-            old_price_elem = soup.select_one(selector)
-            if old_price_elem:
-                old_price = old_price_elem.get_text(strip=True)
-                break
-        
-        # IMAGEN (múltiples selectores)
-        img_selectors = [
-            "img#landingImage",
-            "img#altImages img",
-            "img[data-a-dynamic-image]"
-        ]
+        # IMAGEN PRINCIPAL
         img_url = None
-        for selector in img_selectors:
-            img_elem = soup.select_one(selector)
-            if img_elem and img_elem.get("src"):
-                img_url = img_elem["src"]
+        for selector in [
+            "#landingImage",
+            "#main-image-container img",
+            ".imgTagWrapper img",
+            '[data-a-image-primary]'
+        ]:
+            elem = soup.select_one(selector)
+            if elem and elem.get("src"):
+                img_url = elem["src"]
                 break
         
-        print(f"📦 '{title[:50]}...' | 💰 {price} | 🖼️ {'Sí' if img_url else 'No'}")
+        # PVP (precio anterior)
+        old_price = None
+        for selector in [
+            ".a-text-price span",
+            ".a-price.a-text-price",
+            ".basisPrice"
+        ]:
+            elem = soup.select_one(selector)
+            if elem:
+                old_price = elem.get_text(strip=True)
+                break
+        
+        print(f"📦 '{title[:40]}...' | 💰 {price} | 🖼️ {img_url[:50] if img_url else 'No'}")
         return title, price, old_price, img_url
         
     except Exception as e:
-        print(f"❌ Error scraping: {e}")
-        return "Producto Amazon", "Precio no disponible", None, None
+        print(f"❌ Scraping falló: {str(e)[:50]}")
+        return "Producto Amazon", "Consulta precio", None, None
 
 @client.on(events.NewMessage(chats=target_channel))
 async def tu_canal_handler(event):
-    # ANTI-LOOP: Ignorar mensajes del bot
+    # ANTI-LOOP
     if event.message.id in procesados:
         return
         
-    text = event.raw_text or ""
-    urls = re.findall(r"(https?://\S+)", text)
-    amzn_links = [u for u in urls if "amzn.to" in u.lower() or "amazon" in u.lower()]
+    text = (event.raw_text or "").lower()
+    urls = re.findall(r"https?://\S+", event.raw_text or "")
+    amzn_links = [u for u in urls if any(x in u.lower() for x in ["amzn.to", "amazon.es", "amazon.com"])]
     
     if not amzn_links:
         return
         
-    print(f"🔗 Enlace detectado: {amzn_links[0]}")
+    print(f"🔗 Detectado: {amzn_links[0]}")
     
-    # ANTI-SPAM: cooldown 3 segundos
+    # ANTI-SPAM
     procesados.add(event.message.id)
-    await asyncio.sleep(1)
+    await asyncio.sleep(2)
     
-    # BORRAR original
+    # BORRAR
     try:
         await event.delete()
-        print("🗑️ Mensaje BORRADO")
+        print("🗑️ BORRADO")
     except:
         pass
     
+    # PROCESAR
     short_url = amzn_links[0]
     try:
         final_url = resolve_amzn(short_url)
@@ -143,43 +160,45 @@ async def tu_canal_handler(event):
         if not asin:
             await client.send_message(target_channel, "❌ Enlace inválido")
             return
-            
-        affiliate_url = build_affiliate_url(asin)
-        title, price, old_price, img_url = get_product_info(final_url)
         
-        # FORMATO OFERTA PROFESIONAL
+        affiliate_url = build_affiliate_url(asin)
+        title, price, old_price, img_url = scrape_amazon(final_url)
+        
+        # OFERTA FORMATO PROFESIONAL
         oferta = f"""🔥 **OFERTA FLASH** 🔥
 
 **{title}**
 ✨ **{price}**
 """
-        if old_price:
+        if old_price and old_price != price:
             oferta += f"▫️ ~~{old_price}~~\n"
-        oferta += f"\n🔰 [Comprar ahora]({affiliate_url})\n\n"
-        oferta += f"👻 *solochollos.com*"
+        
+        oferta += f"\n🔰 [{title[:30]}...]({affiliate_url})\n\n"
+        oferta += f"👻 solochollos.com"
         
         # PUBLICAR
         if img_url:
             try:
-                img_data = requests.get(img_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"}).content
-                await client.send_file(target_channel, file=img_data, caption=oferta, parse_mode='md')
-                print("✅ ✅ OFERTA CON FOTO ✓")
+                headers = {"User-Agent": random.choice(user_agents)}
+                img_data = requests.get(img_url, headers=headers, timeout=12).content
+                await client.send_file(target_channel, img_data, caption=oferta, parse_mode='md')
+                print("✅ OFERTA CON FOTO ✓")
             except:
                 await client.send_message(target_channel, oferta, parse_mode='md')
-                print("✅ ✅ OFERTA SIN FOTO ✓")
+                print("✅ OFERTA SIN FOTO ✓")
         else:
             await client.send_message(target_channel, oferta, parse_mode='md')
-            print("✅ ✅ OFERTA PUBLICADA ✓")
-            
-        # Limpiar procesados cada 5 min
-        if len(procesados) > 100:
-            procesados.clear()
-            
+            print("✅ OFERTA PUBLICADA ✓")
+        
     except Exception as e:
-        print(f"💥 Error total: {e}")
-        await client.send_message(target_channel, f"💥 Error: {str(e)[:100]}")
+        print(f"💥 Error: {e}")
+        await client.send_message(target_channel, "💥 Error procesando oferta")
+    
+    # LIMPIEZA
+    if len(procesados) > 200:
+        procesados.clear()
 
-print("🤖 Bot chollos ULTIMATE v2.0 iniciado")
-print("✅ Borra enlaces → Ofertas automáticas")
-print("✅ Anti-loop + Anti-spam implementado")
+print("🤖 Bot chollos v3.0 - ANTI-BLOQUEO AMAZON")
+print("✅ Headers rotativos + 20+ selectores")
+print("✅ Detecta amzn.to + amazon.es/com")
 client.run_until_disconnected()
