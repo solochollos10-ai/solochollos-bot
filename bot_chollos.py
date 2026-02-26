@@ -10,9 +10,9 @@ import io
 # ==============================
 # CONFIGURACIÓN
 # ==============================
-api_id = 31172090
-api_hash = "b4c84f7b5370fa8a4afacaf6ff4a4d02"
-bot_token = "1302161453:AAGYg7epLu2fcrGYYJhFPrKP1EmdG2YTSqg"
+api_id = 
+api_hash = 
+bot_token = 
 
 affiliate_tag = "solochollos08-21"
 source_channel = "@chollosdeluxe"
