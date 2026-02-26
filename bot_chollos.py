@@ -30,7 +30,6 @@ session.headers.update({
 # ==============================
 # FUNCIONES AMAZON
 # ==============================
-
 def extract_asin(url):
     patterns = [
         r"/dp/([A-Z0-9]{10})",
@@ -43,7 +42,6 @@ def extract_asin(url):
     return None
 
 def resolve_amazon_link(url):
-    """Resuelve amzn.to o amazon short URL a ASIN"""
     try:
         r = session.get(url, allow_redirects=True, timeout=15)
         final_url = r.url.split("?")[0]
@@ -57,41 +55,53 @@ def build_affiliate_url(asin):
     return f"https://www.amazon.es/dp/{asin}/?tag={affiliate_tag}"
 
 def scrape_amazon_product(asin):
-    """Scrapea la página del producto y obtiene datos robustos"""
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         r = session.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "lxml")
 
         # --- TÍTULO ---
-        title = soup.select_one("#productTitle")
-        if not title:
-            title = soup.select_one("span.a-size-large.a-color-base.a-text-normal")
+        title = soup.select_one("#productTitle") or soup.select_one("span.a-size-large.a-color-base.a-text-normal")
         title = title.get_text(strip=True) if title else "Producto Amazon"
 
-        # --- PRECIO ---
-        price_whole = soup.select_one(".a-price .a-price-whole")
-        price_fraction = soup.select_one(".a-price .a-price-fraction")
+        # --- PRECIO ACTUAL ---
         price = None
-        if price_whole and price_fraction:
-            price = f"{price_whole.text.strip()},{price_fraction.text.strip()}€"
+        price_selectors = [
+            ".a-price .a-price-whole",  # estándar
+            "#corePriceDisplay_desktop_feature_div .a-price .a-price-whole",
+            "#priceblock_ourprice",
+            "#priceblock_dealprice"
+        ]
+        fraction_selectors = [
+            ".a-price .a-price-fraction",
+        ]
+        for sel in price_selectors:
+            whole = soup.select_one(sel)
+            if whole:
+                fraction = soup.select_one(fraction_selectors[0])
+                fraction_text = fraction.text.strip() if fraction else "00"
+                price = f"{whole.text.strip()},{fraction_text}€"
+                break
 
-        # --- PRECIO ANTERIOR ---
-        old_price = soup.select_one(".a-price.a-text-price .a-offscreen")
-        old_price = old_price.text.strip() if old_price else None
+        # --- PRECIO ANTIGUO ---
+        old_price = None
+        old_price_selectors = [
+            ".a-price.a-text-price .a-offscreen",
+            "#priceblock_listprice",
+        ]
+        for sel in old_price_selectors:
+            old = soup.select_one(sel)
+            if old:
+                old_price = old.text.strip()
+                break
 
         # --- VALORACIÓN ---
         rating = soup.select_one("#acrPopover")
-        if rating and rating.has_attr("title"):
-            rating_text = rating["title"].strip()
-        else:
-            rating_text = None
+        rating_text = rating["title"].strip() if rating and rating.has_attr("title") else None
 
         # --- NÚMERO DE RESEÑAS ---
         reviews = soup.select_one("#acrCustomerReviewText")
-        reviews_text = None
-        if reviews:
-            reviews_text = re.sub(r"[^\d]", "", reviews.text.strip())
+        reviews_text = re.sub(r"[^\d]", "", reviews.text.strip()) if reviews else None
 
         # --- IMAGEN PRINCIPAL ---
         img_url = None
@@ -115,8 +125,10 @@ def scrape_amazon_product(asin):
         print("Error scraping:", e)
         return None
 
+# ==============================
+# PROCESAMIENTO DE IMAGEN
+# ==============================
 def process_image(image_url, max_size=(800, 800), border_color="#ffa500"):
-    """Redimensiona la imagen y añade marco naranja"""
     try:
         r = session.get(image_url, timeout=15)
         img = Image.open(BytesIO(r.content)).convert("RGB")
@@ -134,18 +146,13 @@ def process_image(image_url, max_size=(800, 800), border_color="#ffa500"):
 # ==============================
 # PROCESAR MENSAJES DEL CANAL ORIGEN
 # ==============================
-
 async def process_source_message(event):
     text = event.raw_text or ""
     links = re.findall(r'(https?://\S+)', text)
     if not links:
         return
 
-    amazon_link = None
-    for link in links:
-        if "amzn.to" in link or "amazon.es" in link:
-            amazon_link = link
-            break
+    amazon_link = next((l for l in links if "amzn.to" in l or "amazon.es" in l), None)
     if not amazon_link:
         return
 
@@ -155,16 +162,13 @@ async def process_source_message(event):
         return
 
     affiliate_url = build_affiliate_url(asin)
-    # Copiar texto original sin modificar el enlace si quieres enlace directo
-    new_text = text.replace(amazon_link, affiliate_url)
-
     product = scrape_amazon_product(asin)
 
     if product:
-        # Preparar mensaje con formato
         rating_text = f"{product['rating']} y {product['reviews']} opiniones" if product['rating'] and product['reviews'] else ""
-        price_text = product['price'].replace(",,", ",") if product['price'] else ""
-        old_price_text = product['old_price'] if product['old_price'] else ""
+        price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
+        old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
+
         message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
 
         img_file = process_image(product['image']) if product.get('image') else None
@@ -186,9 +190,8 @@ async def process_source_message(event):
             print("Error enviando mensaje:", e)
 
 # ==============================
-# PROCESAR ENLACES PEGADOS EN TU CANAL
+# PROCESAR ENLACES PEGADOS EN EL CANAL DESTINO
 # ==============================
-
 async def process_target_message(event):
     text = event.raw_text.strip()
     if not re.match(r'^https?://\S+$', text):
@@ -198,7 +201,6 @@ async def process_target_message(event):
     if not asin:
         return
 
-    # Borrar mensaje original
     await event.delete()
 
     affiliate_url = build_affiliate_url(asin)
@@ -207,8 +209,8 @@ async def process_target_message(event):
         return
 
     rating_text = f"{product['rating']} y {product['reviews']} opiniones" if product['rating'] and product['reviews'] else ""
-    price_text = product['price'].replace(",,", ",") if product['price'] else ""
-    old_price_text = product['old_price'] if product['old_price'] else ""
+    price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
+    old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
 
     message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
 
@@ -231,7 +233,6 @@ async def process_target_message(event):
 # ==============================
 # MAIN
 # ==============================
-
 async def main():
     await client.start(bot_token=bot_token)
     print("🤖 BOT ACTIVADO")
