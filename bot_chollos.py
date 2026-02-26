@@ -7,6 +7,7 @@ from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from PIL import Image, ImageOps
 from io import BytesIO
+import io
 
 # ==============================
 # CREDENCIALES DESDE VARIABLES DE ENTORNO
