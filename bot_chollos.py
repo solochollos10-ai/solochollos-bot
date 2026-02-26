@@ -10,9 +10,10 @@ import io
 # ==============================
 # CONFIGURACIÓN
 # ==============================
-api_id = 
-api_hash = 
-bot_token = 
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+bot_token = os.getenv("BOT_TOKEN")
+affiliate_tag = os.getenv("AFFILIATE_TAG", "solochollos08-21")
 
 affiliate_tag = "solochollos08-21"
 source_channel = "@chollosdeluxe"
