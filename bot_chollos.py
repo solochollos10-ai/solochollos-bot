@@ -1,3 +1,4 @@
+import os
 import asyncio
 import re
 import requests
@@ -5,7 +6,6 @@ from bs4 import BeautifulSoup
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from PIL import Image, ImageOps
-import io
 
 # ==============================
 # CONFIGURACIÓN
