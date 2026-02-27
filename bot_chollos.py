@@ -18,7 +18,6 @@ affiliate_tag = os.getenv("AFFILIATE_TAG", "solochollos08-21")
 
 source_channel = "@chollosdeluxe"
 target_channel = "@solochollos10"
-
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
 session = requests.Session()
@@ -54,6 +53,9 @@ def resolve_amazon_link(url):
 def build_affiliate_url(asin):
     return f"https://www.amazon.es/dp/{asin}/?tag={affiliate_tag}"
 
+# ==============================
+# SCRAPEANDO AMAZON
+# ==============================
 def scrape_amazon_product(asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
@@ -73,7 +75,7 @@ def scrape_amazon_product(asin):
             "#priceblock_dealprice"
         ]
         fraction_selectors = [
-            ".a-price .a-price-fraction",
+            ".a-price .a-price-fraction",  # decimal
         ]
         for sel in price_selectors:
             whole = soup.select_one(sel)
@@ -126,7 +128,7 @@ def scrape_amazon_product(asin):
         return None
 
 # ==============================
-# PROCESAMIENTO DE IMAGEN
+# PROCESAR IMAGEN
 # ==============================
 def process_image(image_url, max_size=(800, 800), border_color="#ffa500"):
     try:
@@ -149,6 +151,7 @@ def process_image(image_url, max_size=(800, 800), border_color="#ffa500"):
 async def process_source_message(event):
     text = event.raw_text or ""
     links = re.findall(r'(https?://\S+)', text)
+
     if not links:
         return
 
@@ -163,16 +166,12 @@ async def process_source_message(event):
 
     affiliate_url = build_affiliate_url(asin)
     product = scrape_amazon_product(asin)
-
     if product:
         rating_text = f"{product['rating']} y {product['reviews']} opiniones" if product['rating'] and product['reviews'] else ""
         price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
         old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
-
         message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
-
         img_file = process_image(product['image']) if product.get('image') else None
-
         try:
             if img_file:
                 await client.send_file(
@@ -190,47 +189,6 @@ async def process_source_message(event):
             print("Error enviando mensaje:", e)
 
 # ==============================
-# PROCESAR ENLACES PEGADOS EN EL CANAL DESTINO
-# ==============================
-async def process_target_message(event):
-    text = event.raw_text.strip()
-    if not re.match(r'^https?://\S+$', text):
-        return
-
-    asin = resolve_amazon_link(text)
-    if not asin:
-        return
-
-    await event.delete()
-
-    affiliate_url = build_affiliate_url(asin)
-    product = scrape_amazon_product(asin)
-    if not product:
-        return
-
-    rating_text = f"{product['rating']} y {product['reviews']} opiniones" if product['rating'] and product['reviews'] else ""
-    price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
-    old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
-
-    message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
-
-    img_file = process_image(product['image']) if product.get('image') else None
-
-    try:
-        if img_file:
-            await client.send_file(
-                target_channel,
-                img_file,
-                caption=message,
-                parse_mode="md"
-            )
-        else:
-            await client.send_message(target_channel, message, parse_mode="md")
-        print("✅ Oferta generada desde enlace")
-    except Exception as e:
-        print("Error publicando oferta:", e)
-
-# ==============================
 # MAIN
 # ==============================
 async def main():
@@ -242,10 +200,6 @@ async def main():
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
         await process_source_message(event)
-
-    @client.on(events.NewMessage(chats=target_channel))
-    async def handler_target(event):
-        await process_target_message(event)
 
     await client.run_until_disconnected()
 
