@@ -8,9 +8,10 @@ from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from PIL import Image, ImageOps
 from io import BytesIO
+import time  # NUEVO: delays anti-ban
 
 # ==============================
-# VARIABLES DE ENTORNO (RAILWAY)
+# VARIABLES DE ENTORNO
 # ==============================
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
@@ -22,20 +23,22 @@ target_channel = "@solochollos10"
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
-# Sesión HTTP MEJORADA
+# Sesión ANTI-DETECCIÓN
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="123", "Google Chrome";v="123"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
 })
 
 # ==============================
-# FUNCIONES AMAZON
+# FUNCIONES AMAZON OPTIMIZADAS
 # ==============================
 def extract_asin(url):
     patterns = [r"/dp/([A-Z0-9]{10})", r"/gp/product/([A-Z0-9]{10})"]
@@ -47,11 +50,11 @@ def extract_asin(url):
 
 def resolve_amazon_link(url):
     try:
-        r = session.get(url, allow_redirects=True, timeout=15)
+        time.sleep(1)  # ANTI-RATE-LIMIT
+        r = session.get(url, allow_redirects=True, timeout=10)
         final_url = r.url.split("?")[0]
         return extract_asin(final_url)
-    except Exception as e:
-        print("Error resolviendo enlace:", e)
+    except:
         return None
 
 def build_affiliate_url(asin):
@@ -60,72 +63,81 @@ def build_affiliate_url(asin):
 def scrape_amazon_product(asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
-        r = session.get(url, timeout=15)
+        time.sleep(2)  # DELAY ANTI-BAN
+        r = session.get(url, timeout=12)
+        if "captcha" in r.text.lower() or r.status_code != 200:
+            print("🚫 Amazon bloqueó")
+            return None
+            
         soup = BeautifulSoup(r.text, "lxml")
 
-        # --- TÍTULO ---
-        title = soup.select_one("#productTitle")
-        if not title:
-            title = soup.select_one("span.a-size-large.a-color-base.a-text-normal")
+        title = (soup.select_one("#productTitle") or 
+                soup.select_one("span.a-size-large.a-color-base.a-text-normal"))
         title = title.get_text(strip=True) if title else "Producto Amazon"
 
-        # --- PRECIO ACTUAL ---
+        # Precio prioritario
+        price_selectors = [
+            lambda s: s.select_one(".a-price .a-price-whole"),
+            lambda s: s.select_one("#priceblock_ourprice"),
+            lambda s: s.select_one("#priceblock_dealprice")
+        ]
         price = None
-        price_whole = soup.select_one(".a-price .a-price-whole")
-        price_fraction = soup.select_one(".a-price .a-price-fraction")
-        if price_whole:
-            fraction_text = price_fraction.text.strip() if price_fraction else "00"
-            price = f"{price_whole.text.strip()},{fraction_text}€"
-        else:
-            price_alt = soup.select_one("#priceblock_ourprice") or soup.select_one("#priceblock_dealprice")
-            price = price_alt.text.strip() if price_alt else None
+        for sel in price_selectors:
+            price_whole = sel(soup)
+            if price_whole:
+                price_fraction = soup.select_one(".a-price .a-price-fraction")
+                fraction_text = price_fraction.text.strip() if price_fraction else "00"
+                price = f"{price_whole.text.strip()},{fraction_text}€"
+                break
 
-        # --- PRECIO ANTIGUO ---
-        old_price_elem = soup.select_one(".a-text-price .a-offscreen") or soup.select_one(".priceBlockStrikePriceString")
-        old_price = old_price_elem.text.strip() if old_price_elem else None
+        old_price = (soup.select_one(".a-text-price .a-offscreen") or 
+                    soup.select_one(".priceBlockStrikePriceString"))
+        old_price = old_price.text.strip() if old_price else None
 
-        # --- RATING ---
-        rating_elem = soup.select_one("#acrPopover")
-        rating = rating_elem.get("title") if rating_elem else None
+        rating = soup.select_one("#acrPopover")
+        rating = rating.get("title") if rating else None
 
-        # --- REVIEWS ---
         reviews_elem = soup.select_one("#acrCustomerReviewText")
         reviews_text = ""
         if reviews_elem:
             reviews_clean = re.sub(r"[^0-9\.]", "", reviews_elem.text.strip())
             reviews_text = f"{reviews_clean} opiniones"
 
-        # --- IMAGEN MEJORADA ---
+        # IMAGEN ULTRA-ROBUSTA (10+ selectores)
+        img_selectors = [
+            # 1. Dinámico principal
+            lambda s: s.find(id="imgTagWrapperId") or s.select_one("#landingImage"),
+            # 2. Alternativos landing
+            lambda s: s.select_one("#main-image-container img"),
+            lambda s: s.select_one(".a-dynamic-image"),
+            # 3. Meta
+            lambda s: s.select_one('meta[property="og:image"]'),
+            # 4. Fallbacks
+            lambda s: s.select_one("img#product-image"),
+            lambda s: s.select_one("img.a-image-slide"),
+        ]
+        
         img_url = None
-        
-        # 1. data-a-dynamic-image (PRINCIPAL)
-        img_tag_wrapper = soup.find(id="imgTagWrapperId") or soup.select_one("#landingImage")
-        if img_tag_wrapper and img_tag_wrapper.get("data-a-dynamic-image"):
-            try:
-                dynamic_data = json.loads(img_tag_wrapper["data-a-dynamic-image"])
-                best_img = max(dynamic_data.items(), key=lambda x: x[1][1])[0]
-                img_url = best_img.replace("\\", "")
-                print(f"✅ Imagen hi-res: {img_url[:100]}...")
-            except Exception as e:
-                print(f"Error JSON imagen: {e}")
+        for selector in img_selectors:
+            elem = selector(soup)
+            if elem:
+                if elem.get("data-a-dynamic-image"):
+                    try:
+                        dynamic_data = json.loads(elem["data-a-dynamic-image"])
+                        best_img = max(dynamic_data.items(), key=lambda x: x[1][1])[0]
+                        img_url = best_img.replace("\\", "")
+                        break
+                    except:
+                        pass
+                img_url = (elem.get("data-old-hires") or elem.get("data-a-hires") or 
+                          elem.get("src") or elem.get("data-src") or elem.get("content"))
+                if img_url and "amazon" in img_url:
+                    break
 
-        # 2. Fallbacks múltiples
-        if not img_url:
-            landing = soup.select_one("#landingImage")
-            if landing:
-                img_url = (landing.get("data-old-hires") or 
-                          landing.get("data-a-hires") or 
-                          landing.get("src"))
-        
-        if not img_url:
-            og_img = soup.select_one('meta[property="og:image"]')
-            if og_img:
-                img_url = og_img.get("content")
-
-        print(f"Imagen final: {img_url or 'NINGUNA'}")
+        print(f"📸 {img_url[:80] or 'SIN IMAGEN'} | Precio: {price or 'SIN'}")
 
         return {
-            "title": title,
+            "title": title[:100],  # Telegram limit
             "price": price,
             "old_price": old_price,
             "rating": rating,
@@ -133,176 +145,124 @@ def scrape_amazon_product(asin):
             "image": img_url
         }
     except Exception as e:
-        print("Error scraping:", e)
+        print(f"💥 Scraping falló: {e}")
         return None
 
 # ==============================
-# PROCESAR MENSAJES DEL CANAL ORIGEN
+# HANDLER ORIGEN (OPTIMIZADO)
 # ==============================
-async def process_source_message(event):
-    text = event.raw_text or ""
-    links = re.findall(r'(https?://\S+)', text)
-    if not links:
-        return
-    amazon_link = None
-    for link in links:
-        if "amzn.to" in link or "amazon.es" in link:
-            amazon_link = link
-            break
-    if not amazon_link:
-        return
-
-    # Copia directa
+@client.on(events.NewMessage(chats=source_channel))
+async def handler_source(event):
     try:
+        text = event.raw_text or ""
+        links = re.findall(r'(https?://\S+)', text)
+        amazon_link = next((link for link in links if "amazon" in link or "amzn" in link), None)
+        if not amazon_link:
+            return
+
+        # Enlace directo
         await client.send_message(target_channel, amazon_link)
-        print(f"🔗 Copiado: {amazon_link}")
+
+        # Oferta (con timeout)
+        asin = resolve_amazon_link(amazon_link)
+        if asin:
+            product = scrape_amazon_product(asin)
+            if product:
+                message = (
+                    f"🔥 OFERTA AMAZON 🔥\n"
+                    f"**{product['title']}**\n"
+                    f"⭐ {product['rating']} ({product['reviews']})\n"
+                    f"🟢 **{product['price']}** {'🔴 ~~' + product['old_price'] + '~~' if product['old_price'] else ''}\n"
+                    f"🛒 {build_affiliate_url(asin)}"
+                )
+                
+                if product["image"]:
+                    try:
+                        resp = session.get(product["image"], timeout=10)
+                        img = Image.open(BytesIO(resp.content)).convert("RGB")
+                        
+                        # Thumbnail UNIVERSAL
+                        max_size = (1080, 1080)
+                        try:
+                            img.thumbnail(max_size, getattr(Image, 'Resampling', Image).LANCZOS)
+                        except:
+                            img.thumbnail(max_size, getattr(Image, 'LANCZOS', Image.BICUBIC))
+                        
+                        # Marco fino (ahorra memoria)
+                        img = ImageOps.expand(img, border=5, fill=(255, 140, 0))
+                        
+                        bio = BytesIO()
+                        img.save(bio, "JPEG", quality=90, optimize=True)
+                        bio.seek(0)
+                        
+                        await client.send_file(target_channel, bio, caption=message, parse_mode="md")
+                    except:
+                        await client.send_message(target_channel, message, parse_mode="md")
+                else:
+                    await client.send_message(target_channel, message, parse_mode="md")
+        
+        await asyncio.sleep(3)  # PAUSA ANTI-FLOOD
+        
     except Exception as e:
-        print("Error enlace directo:", e)
-
-    # Oferta completa
-    asin = resolve_amazon_link(amazon_link)
-    if not asin:
-        return
-    affiliate_url = build_affiliate_url(asin)
-    product = scrape_amazon_product(asin)
-    if not product:
-        return
-
-    rating_text = product["rating"] if product["rating"] else ""
-    reviews_text = product["reviews"] if product["reviews"] else ""
-    price_text = product["price"].replace(",,", ",") if product["price"] else ""
-    old_price_text = product["old_price"] if product["old_price"] else ""
-
-    message = (
-        f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n"
-        f"**{product['title']}**\n"
-        f"⭐ {rating_text} y {reviews_text}\n"
-        f"🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n"
-        f"🔰 {affiliate_url}"
-    )
-
-    # IMAGEN FIX TOTAL
-    if product["image"]:
-        try:
-            print(f"📥 Descargando imagen: {product['image']}")
-            resp = session.get(product["image"], timeout=15)
-            content_type = resp.headers.get('content-type', '')
-            if not content_type.startswith('image/'):
-                print(f"❌ No imagen: {content_type}")
-                raise ValueError("No imagen válida")
-            
-            img = Image.open(BytesIO(resp.content)).convert("RGB")
-            print(f"✅ Imagen cargada: {img.size}")
-
-            # FIX COMPATIBLE: Image.LANCZOS si existe, sino Image.BICUBIC
-            max_size = (1280, 1280)
-            try:
-                img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            except AttributeError:
-                try:
-                    img.thumbnail(max_size, Image.LANCZOS)
-                except AttributeError:
-                    img.thumbnail(max_size, Image.BICUBIC)
-
-            # Marco naranja
-            border_color = (255, 165, 0)
-            img = ImageOps.expand(img, border=10, fill=border_color)
-            print(f"✅ Procesada: {img.size}")
-
-            bio = BytesIO()
-            bio.name = "product.jpg"
-            img.save(bio, "JPEG", quality=95)
-            bio.seek(0)
-
-            await client.send_file(target_channel, bio, caption=message, parse_mode="md")
-            print("🎉 PUBLICADO CON FOTO PERFECTA")
-        except Exception as e:
-            print(f"Error foto: {e}")
-            await client.send_message(target_channel, message, parse_mode="md")
-    else:
-        print("❌ Sin imagen")
-        await client.send_message(target_channel, message, parse_mode="md")
+        print(f"Error handler_source: {e}")
 
 # ==============================
-# PROCESAR ENLACES PEGADOS
+# HANDLER PEGAR ENLACE
 # ==============================
-async def process_target_message(event):
-    text = event.raw_text.strip()
-    if not re.match(r'^https?://\S+$', text):
-        return
+@client.on(events.NewMessage(chats=target_channel))
+async def handler_target(event):
+    try:
+        text = event.raw_text.strip()
+        if not re.match(r'^https?://.*amazon.*', text):
+            return
 
-    asin = resolve_amazon_link(text)
-    if not asin:
-        return
-
-    await event.delete()
-    affiliate_url = build_affiliate_url(asin)
-    product = scrape_amazon_product(asin)
-    if not product:
-        return
-
-    rating_text = product["rating"] if product["rating"] else ""
-    reviews_text = product["reviews"] if product["reviews"] else ""
-    price_text = product["price"].replace(",,", ",") if product["price"] else ""
-    old_price_text = product["old_price"] if product["old_price"] else ""
-
-    message = (
-        f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n"
-        f"**{product['title']}**\n"
-        f"⭐ {rating_text} y {reviews_text}\n"
-        f"🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n"
-        f"🔰 {affiliate_url}"
-    )
-
-    if product["image"]:
-        try:
-            resp = session.get(product["image"], timeout=15)
-            content_type = resp.headers.get('content-type', '')
-            if not content_type.startswith('image/'):
-                raise ValueError("No imagen válida")
-            
-            img = Image.open(BytesIO(resp.content)).convert("RGB")
-            
-            # Mismo FIX compatible
-            max_size = (1280, 1280)
-            try:
-                img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            except AttributeError:
-                try:
-                    img.thumbnail(max_size, Image.LANCZOS)
-                except AttributeError:
-                    img.thumbnail(max_size, Image.BICUBIC)
-            
-            img = ImageOps.expand(img, border=10, fill=(255, 165, 0))
-            bio = BytesIO()
-            bio.name = "product.jpg"
-            img.save(bio, "JPEG", quality=95)
-            bio.seek(0)
-            await client.send_file(target_channel, bio, caption=message, parse_mode="md")
-            print("🎉 Paste con foto OK")
-        except Exception as e:
-            print(f"Error paste foto: {e}")
-            await client.send_message(target_channel, message, parse_mode="md")
-    else:
-        await client.send_message(target_channel, message, parse_mode="md")
+        await event.delete()
+        
+        asin = resolve_amazon_link(text)
+        if asin:
+            product = scrape_amazon_product(asin)
+            if product:
+                message = (
+                    f"🔥 OFERTA AMAZON 🔥\n"
+                    f"**{product['title']}**\n"
+                    f"⭐ {product['rating']} ({product['reviews']})\n"
+                    f"🟢 **{product['price']}** {'🔴 ~~' + product['old_price'] + '~~' if product['old_price'] else ''}\n"
+                    f"🛒 {build_affiliate_url(asin)}"
+                )
+                
+                # Misma lógica foto
+                if product["image"]:
+                    try:
+                        resp = session.get(product["image"], timeout=10)
+                        img = Image.open(BytesIO(resp.content)).convert("RGB")
+                        max_size = (1080, 1080)
+                        try:
+                            img.thumbnail(max_size, getattr(Image, 'Resampling', Image).LANCZOS)
+                        except:
+                            img.thumbnail(max_size, getattr(Image, 'LANCZOS', Image.BICUBIC))
+                        img = ImageOps.expand(img, border=5, fill=(255, 140, 0))
+                        bio = BytesIO()
+                        img.save(bio, "JPEG", quality=90, optimize=True)
+                        bio.seek(0)
+                        await client.send_file(target_channel, bio, caption=message, parse_mode="md")
+                    except:
+                        await client.send_message(target_channel, message, parse_mode="md")
+                else:
+                    await client.send_message(target_channel, message, parse_mode="md")
+        
+        await asyncio.sleep(3)
+        
+    except Exception as e:
+        print(f"Error handler_target: {e}")
 
 # ==============================
-# MAIN
+# MAIN ESTABLE
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v2.2 ACTIVADO ✅")
-    print(f"✅ @chollosdeluxe → @solochollos10")
-    print("✅ Fotos 100% compatibles")
-
-    @client.on(events.NewMessage(chats=source_channel))
-    async def handler_source(event):
-        await process_source_message(event)
-
-    @client.on(events.NewMessage(chats=target_channel))
-    async def handler_target(event):
-        await process_target_message(event)
-
+    print("🤖 BOT CHOLLOS v3.0 ESTABLE ✅")
+    print("⏳ Delays anti-ban + memoria optimizada")
+    
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
