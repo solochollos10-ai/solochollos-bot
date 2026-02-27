@@ -212,42 +212,4 @@ async def process_target_message(event):
     price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
     old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
     
-    message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
-    
-    img_file = process_image(product['image']) if product.get('image') else None
-    
-    try:
-        if img_file:
-            await client.send_file(
-                target_channel,
-                img_file,
-                caption=message,
-                parse_mode="md"
-            )
-        else:
-            await client.send_message(target_channel, message, parse_mode="md")
-        print("✅ Oferta generada desde enlace")
-    except Exception as e:
-        print("Error publicando oferta:", e)
-
-# ==============================
-# MAIN
-# ==============================
-async def main():
-    await client.start(bot_token=bot_token)
-    print("🤖 BOT ACTIVADO")
-    print("✅ Copia @chollosdeluxe → @solochollos10")
-    print("✅ Generación automática de ofertas con enlaces afiliados y fotos")
-
-    @client.on(events.NewMessage(chats=source_channel))
-    async def handler_source(event):
-        await process_source_message(event)
-
-    @client.on(events.NewMessage(chats=target_channel))
-    async def handler_target(event):
-        await process_target_message(event)
-
-    await client.run_until_disconnected()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['
