@@ -9,208 +9,191 @@ from PIL import Image, ImageOps
 from io import BytesIO
 
 # ==============================
-# CONFIGURACIÓN
+# CREDENCIALES DESDE VARIABLES DE ENTORNO
 # ==============================
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "solochollos08-21")
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+bot_token = os.getenv("BOT_TOKEN")
+affiliate_tag = os.getenv("AFFILIATE_TAG", "solochollos08-21")
 
 source_channel = "@chollosdeluxe"
 target_channel = "@solochollos10"
 
-client = TelegramClient("session_bot_chollos", API_ID, API_HASH)
+client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
-# ==============================
-# SESIÓN HTTP (anti-bloqueo básico)
-# ==============================
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "es-ES,es;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    "Accept-Language": "es-ES,es;q=0.9"
 })
 
 # ==============================
-# UTILIDADES AMAZON
+# FUNCIONES AMAZON
 # ==============================
 def extract_asin(url):
     patterns = [
         r"/dp/([A-Z0-9]{10})",
         r"/gp/product/([A-Z0-9]{10})"
     ]
-    for p in patterns:
-        m = re.search(p, url)
-        if m:
-            return m.group(1)
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
     return None
 
 def resolve_amazon_link(url):
     try:
         r = session.get(url, allow_redirects=True, timeout=15)
-        final = r.url.split("?")[0]
-        return extract_asin(final)
-    except:
+        final_url = r.url.split("?")[0]
+        asin = extract_asin(final_url)
+        return asin
+    except Exception as e:
+        print("Error resolviendo enlace:", e)
         return None
 
 def build_affiliate_url(asin):
-    return f"https://www.amazon.es/dp/{asin}/?tag={AFFILIATE_TAG}"
+    return f"https://www.amazon.es/dp/{asin}/?tag={affiliate_tag}"
 
-# ==============================
-# SCRAPING AMAZON (selectores actuales)
-# ==============================
 def scrape_amazon_product(asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         r = session.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "lxml")
 
-        # Título
-        title_elem = soup.select_one("#productTitle")
-        title = title_elem.get_text(strip=True) if title_elem else "Producto Amazon"
+        # --- TÍTULO ---
+        title = soup.select_one("#productTitle") or soup.select_one("span.a-size-large.a-color-base.a-text-normal")
+        title = title.get_text(strip=True) if title else "Producto Amazon"
 
-        # PRECIO ACTUAL
+        # --- PRECIO ACTUAL ---
         price = None
-        price_elem = soup.select_one(".apex-pricetopay-value .a-offscreen")
-        if price_elem:
-            price = price_elem.get_text(strip=True)
-        else:
-            alt = soup.select_one(".a-price .a-offscreen")
-            if alt:
-                price = alt.get_text(strip=True)
+        price_selectors = [
+            ".a-price .a-price-whole",  # estándar
+            "#corePriceDisplay_desktop_feature_div .a-price .a-price-whole",
+            "#priceblock_ourprice",
+            "#priceblock_dealprice"
+        ]
+        fraction_selectors = [
+            ".a-price .a-price-fraction",
+        ]
+        for sel in price_selectors:
+            whole = soup.select_one(sel)
+            if whole:
+                fraction = soup.select_one(fraction_selectors[0])
+                fraction_text = fraction.text.strip() if fraction else "00"
+                price = f"{whole.text.strip()},{fraction_text}€"
+                break
 
-        # PRECIO ANTERIOR
+        # --- PRECIO ANTIGUO ---
         old_price = None
-        old_price_elem = soup.select_one(".apex-basisprice-value .a-offscreen")
-        if old_price_elem:
-            old_price = old_price_elem.get_text(strip=True)
-        else:
-            alt_old = soup.select_one(".a-text-price .a-offscreen")
-            if alt_old:
-                old_price = alt_old.get_text(strip=True)
+        old_price_selectors = [
+            ".a-price.a-text-price .a-offscreen",
+            "#priceblock_listprice",
+        ]
+        for sel in old_price_selectors:
+            old = soup.select_one(sel)
+            if old:
+                old_price = old.text.strip()
+                break
 
-        # VALORACIÓN
-        rating_elem = soup.select_one("#acrPopover")
-        rating = rating_elem["title"] if rating_elem and rating_elem.has_attr("title") else ""
+        # --- VALORACIÓN ---
+        rating = soup.select_one("#acrPopover")
+        rating_text = rating["title"].strip() if rating and rating.has_attr("title") else None
 
-        # REVIEWS
-        reviews_elem = soup.select_one("#acrCustomerReviewText")
-        reviews = reviews_elem.get_text(strip=True) if reviews_elem else ""
+        # --- NÚMERO DE RESEÑAS ---
+        reviews = soup.select_one("#acrCustomerReviewText")
+        reviews_text = re.sub(r"[^\d]", "", reviews.text.strip()) if reviews else None
 
-        # FOTO
+        # --- IMAGEN PRINCIPAL ---
         img_url = None
-        img_elem = soup.select_one('#imageBlock #main-image-container img')
-        if img_elem:
-            img_url = img_elem.get('src')
+        landing = soup.select_one("#landingImage")
+        if landing:
+            img_url = landing.get("data-old-hires") or landing.get("src")
+        if not img_url:
+            og_img = soup.select_one('meta[property="og:image"]')
+            if og_img:
+                img_url = og_img.get("content")
 
         return {
             "title": title,
-            "price": price or "",
-            "old_price": old_price or "",
-            "rating": rating or "",
-            "reviews": reviews or "",
-            "image": img_url or ""
+            "price": price,
+            "old_price": old_price,
+            "rating": rating_text,
+            "reviews": reviews_text,
+            "image": img_url
         }
-
     except Exception as e:
-        print("scrape_amazon_product error:", e)
+        print("Error scraping:", e)
         return None
 
 # ==============================
-# IMAGEN: REDIMENSIONAR + MARCO NARANJA
+# PROCESAMIENTO DE IMAGEN
 # ==============================
-def fetch_and_frame_image(url):
+def process_image(image_url, max_size=(800, 800), border_color="#ffa500"):
     try:
-        r = session.get(url, timeout=15)
+        r = session.get(image_url, timeout=15)
         img = Image.open(BytesIO(r.content)).convert("RGB")
-        img.thumbnail((1100, 1100))
-        framed = ImageOps.expand(img, border=10, fill="#ff7a00")
-
-        buffer = BytesIO()
-        buffer.name = "producto.jpg"
-        framed.save(buffer, format="JPEG", quality=90)
-        buffer.seek(0)
-        return buffer
-    except:
+        img.thumbnail(max_size, Image.ANTIALIAS)
+        border = ImageOps.expand(img, border=10, fill=border_color)
+        output = BytesIO()
+        output.name = "product.jpg"
+        border.save(output, format="JPEG")
+        output.seek(0)
+        return output
+    except Exception as e:
+        print("Error procesando imagen:", e)
         return None
 
 # ==============================
-# HANDLERS: copiar desde origen + generar oferta
+# PROCESAR MENSAJES DEL CANAL ORIGEN
 # ==============================
 async def process_source_message(event):
     text = event.raw_text or ""
-
-    # Copiar SIEMPRE el mensaje original (si no es Amazon)
     links = re.findall(r'(https?://\S+)', text)
-
     if not links:
-        # copiar mensaje normal
-        await client.send_message(target_channel, text)
         return
 
-    amazon_link = None
-    for link in links:
-        if "amazon" in link or "amzn.to" in link:
-            amazon_link = link
-            break
-
-    # Si no es Amazon → copiar tal cual
+    amazon_link = next((l for l in links if "amzn.to" in l or "amazon.es" in l), None)
     if not amazon_link:
-        await client.send_message(target_channel, text)
         return
 
-    # Resolver ASIN
     asin = resolve_amazon_link(amazon_link)
     if not asin:
-        await client.send_message(target_channel, text)
-        return
-
-    product = scrape_amazon_product(asin)
-    if not product:
-        await client.send_message(target_channel, text)
+        print("ASIN no encontrado")
         return
 
     affiliate_url = build_affiliate_url(asin)
+    product = scrape_amazon_product(asin)
 
-    message = "🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n"
-    message += f"**{product['title']}**\n"
+    if product:
+        rating_text = f"{product['rating']} y {product['reviews']} opiniones" if product['rating'] and product['reviews'] else ""
+        price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
+        old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
 
-    if product["rating"]:
-        message += f"⭐ {product['rating']} {product['reviews']}\n"
+        message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
 
-    if product["price"]:
-        message += f"🟢 **AHORA {product['price']}**\n"
-    else:
-        message += "🟢 **AHORA: No disponible**\n"
+        img_file = process_image(product['image']) if product.get('image') else None
 
-    if product["old_price"]:
-        message += f"🔴 ~~ANTES: {product['old_price']}~~\n"
-
-    message += f"🔰 {affiliate_url}"
-
-    # Procesar imagen (descarga, resize, marco)
-    img_buf = None
-    if product["image"]:
-        img_buf = fetch_and_frame_image(product["image"])
-
-    try:
-        if img_buf:
-            await client.send_file(target_channel, img_buf, caption=message, parse_mode="md")
-            print("✅ Oferta publicada con imagen")
-        else:
-            await client.send_message(target_channel, message, parse_mode="md")
-            print("✅ Oferta publicada sin imagen")
-    except FloodWaitError as e:
-        print("FloodWait:", e.seconds)
-        await asyncio.sleep(e.seconds)
-    except Exception as e:
-        print("Error publicando oferta enriquecida:", e)
+        try:
+            if img_file:
+                await client.send_file(
+                    target_channel,
+                    img_file,
+                    caption=message,
+                    parse_mode="md"
+                )
+            else:
+                await client.send_message(target_channel, message, parse_mode="md")
+            print("✅ Oferta copiada correctamente")
+        except FloodWaitError as e:
+            await asyncio.sleep(e.seconds)
+        except Exception as e:
+            print("Error enviando mensaje:", e)
 
 # ==============================
-# HANDLER: cuando pegues solo un enlace en TU canal
+# PROCESAR ENLACES PEGADOS EN EL CANAL DESTINO
 # ==============================
 async def process_target_message(event):
-    text = (event.raw_text or "").strip()
+    text = event.raw_text.strip()
     if not re.match(r'^https?://\S+$', text):
         return
 
@@ -218,73 +201,51 @@ async def process_target_message(event):
     if not asin:
         return
 
-    # borrar mensaje original (para ocultar enlace feo)
-    try:
-        await event.delete()
-    except Exception:
-        pass
+    await event.delete()
 
-    product = scrape_amazon_product(asin)
     affiliate_url = build_affiliate_url(asin)
+    product = scrape_amazon_product(asin)
     if not product:
-        # si no hay datos, publicar solo afiliado
-        await client.send_message(target_channel, affiliate_url)
         return
 
-    # formatear rating/reviews
-    rating_block = ""
-    if product["rating"] and product["reviews"]:
-        reviews_clean = re.sub(r"[^\d\.]", "", product["reviews"])
-        rating_block = f"{product['rating']} y {reviews_clean} opiniones"
-    elif product["rating"]:
-        rating_block = product["rating"]
-    elif product["reviews"]:
-        rating_block = product["reviews"]
+    rating_text = f"{product['rating']} y {product['reviews']} opiniones" if product['rating'] and product['reviews'] else ""
+    price_text = product['price'].replace(",,", ",") if product['price'] else "Precio no disponible"
+    old_price_text = product['old_price'] if product['old_price'] else "Precio anterior no disponible"
 
-    price_new = product["price"] or ""
-    price_old = product["old_price"] or ""
+    message = f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n**{product['title']}**\n⭐ {rating_text}\n🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n🔰 {affiliate_url}"
 
-    message_lines = [
-        "🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥",
-        f"**{product['title']}**",
-    ]
-    if rating_block:
-        message_lines.append(f"⭐ {rating_block}")
-    if price_new:
-        message_lines.append(f"🟢 **AHORA {price_new}**")
-    else:
-        message_lines.append("🟢 **AHORA: Precio no disponible**")
-    if price_old:
-        message_lines.append(f"🔴 ~~ANTES: {price_old}~~")
-    message_lines.append(f"🔰 {affiliate_url}")
-    message = "\n".join(message_lines)
-
-    img_buf = None
-    if product["image"]:
-        img_buf = fetch_and_frame_image(product["image"])
+    img_file = process_image(product['image']) if product.get('image') else None
 
     try:
-        if img_buf:
-            await client.send_file(target_channel, img_buf, caption=message, parse_mode="md")
+        if img_file:
+            await client.send_file(
+                target_channel,
+                img_file,
+                caption=message,
+                parse_mode="md"
+            )
         else:
             await client.send_message(target_channel, message, parse_mode="md")
-    except FloodWaitError as e:
-        print("FloodWait:", e.seconds)
-        await asyncio.sleep(e.seconds)
+        print("✅ Oferta generada desde enlace")
     except Exception as e:
-        print("Error publicando oferta desde tu canal:", e)
+        print("Error publicando oferta:", e)
 
 # ==============================
 # MAIN
 # ==============================
 async def main():
-    await client.start(bot_token=BOT_TOKEN)
-    print("🤖 BOT ARRANCADO")
-    print(f"Copiando {source_channel} → {target_channel}")
+    await client.start(bot_token=bot_token)
+    print("🤖 BOT ACTIVADO")
+    print("✅ Copia @chollosdeluxe → @solochollos10")
+    print("✅ Generación automática de ofertas con enlaces afiliados y fotos")
 
     @client.on(events.NewMessage(chats=source_channel))
-    async def handler(event):
+    async def handler_source(event):
         await process_source_message(event)
+
+    @client.on(events.NewMessage(chats=target_channel))
+    async def handler_target(event):
+        await process_target_message(event)
 
     await client.run_until_disconnected()
 
