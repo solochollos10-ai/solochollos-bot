@@ -181,9 +181,10 @@ async def process_source_message(event):
         f"🔰 {affiliate_url}"
     )
 
-    # IMAGEN CON FALLBACK
+    # IMAGEN FIX TOTAL
     if product["image"]:
         try:
+            print(f"📥 Descargando imagen: {product['image']}")
             resp = session.get(product["image"], timeout=15)
             content_type = resp.headers.get('content-type', '')
             if not content_type.startswith('image/'):
@@ -191,14 +192,22 @@ async def process_source_message(event):
                 raise ValueError("No imagen válida")
             
             img = Image.open(BytesIO(resp.content)).convert("RGB")
+            print(f"✅ Imagen cargada: {img.size}")
 
-            # Thumbnail COMPATIBLE (ANTIALIAS para tu versión PIL)
+            # FIX COMPATIBLE: Image.LANCZOS si existe, sino Image.BICUBIC
             max_size = (1280, 1280)
-            img.thumbnail(max_size, Image.ANTIALIAS)
+            try:
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            except AttributeError:
+                try:
+                    img.thumbnail(max_size, Image.LANCZOS)
+                except AttributeError:
+                    img.thumbnail(max_size, Image.BICUBIC)
 
             # Marco naranja
             border_color = (255, 165, 0)
             img = ImageOps.expand(img, border=10, fill=border_color)
+            print(f"✅ Procesada: {img.size}")
 
             bio = BytesIO()
             bio.name = "product.jpg"
@@ -206,7 +215,7 @@ async def process_source_message(event):
             bio.seek(0)
 
             await client.send_file(target_channel, bio, caption=message, parse_mode="md")
-            print("✅ PUBLICADO CON FOTO")
+            print("🎉 PUBLICADO CON FOTO PERFECTA")
         except Exception as e:
             print(f"Error foto: {e}")
             await client.send_message(target_channel, message, parse_mode="md")
@@ -253,14 +262,24 @@ async def process_target_message(event):
                 raise ValueError("No imagen válida")
             
             img = Image.open(BytesIO(resp.content)).convert("RGB")
+            
+            # Mismo FIX compatible
             max_size = (1280, 1280)
-            img.thumbnail(max_size, Image.ANTIALIAS)
+            try:
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            except AttributeError:
+                try:
+                    img.thumbnail(max_size, Image.LANCZOS)
+                except AttributeError:
+                    img.thumbnail(max_size, Image.BICUBIC)
+            
             img = ImageOps.expand(img, border=10, fill=(255, 165, 0))
             bio = BytesIO()
             bio.name = "product.jpg"
             img.save(bio, "JPEG", quality=95)
             bio.seek(0)
             await client.send_file(target_channel, bio, caption=message, parse_mode="md")
+            print("🎉 Paste con foto OK")
         except Exception as e:
             print(f"Error paste foto: {e}")
             await client.send_message(target_channel, message, parse_mode="md")
@@ -272,9 +291,9 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v2.1 ACTIVADO ✅")
-    print(f"✅ {source_channel} → {target_channel}")
-    print("✅ Fotos Amazon hi-res + afiliados")
+    print("🤖 BOT CHOLLOS v2.2 ACTIVADO ✅")
+    print(f"✅ @chollosdeluxe → @solochollos10")
+    print("✅ Fotos 100% compatibles")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
