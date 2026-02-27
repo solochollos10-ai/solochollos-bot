@@ -282,7 +282,7 @@ async def process_target_message(event):
         f"**{product['title']}**\n"
         f"⭐ {rating_text} y {reviews_text}\n"
         f"{price_line}\n"
-        f"🔰 {affiliate_url}"
+        f"🔰**{affiliate_url}**"
     )
 
     if product["image"]:
