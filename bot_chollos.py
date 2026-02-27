@@ -3,9 +3,10 @@ import asyncio
 import re
 import requests
 from bs4 import BeautifulSoup
+import json  # NUEVO: para data-a-dynamic-image
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, Resampling  # NUEVO: Resampling
 from io import BytesIO
 
 # ==============================
@@ -21,11 +22,16 @@ target_channel = "@solochollos10"
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
-# Sesión HTTP
+# Sesión HTTP MEJORADA (anti-bloqueo)
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-    "Accept-Language": "es-ES,es;q=0.9"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 })
 
 # ==============================
@@ -86,24 +92,38 @@ def scrape_amazon_product(asin):
         reviews_elem = soup.select_one("#acrCustomerReviewText")
         reviews_text = ""
         if reviews_elem:
-            reviews_clean = re.sub(r"[^\\d\\.]", "", reviews_elem.text.strip())
+            reviews_clean = re.sub(r"[^0-9\.]", "", reviews_elem.text.strip())
             reviews_text = f"{reviews_clean} opiniones"
 
-        # --- IMAGEN (MODIFICADO: selector específico img#landingImage.a) ---
+        # --- IMAGEN MEJORADA (ROBUSTA) ---
         img_url = None
-        landing = soup.select_one("img#landingImage.a")  # Nuevo selector prioritario
-        if landing:
-            img_url = landing.get("data-old-hires") or landing.get("src") or landing.get("data-a-dynamic-image")
         
-        # Fallbacks si el selector principal no funciona
+        # 1. data-a-dynamic-image (IMAGEN PRINCIPAL HI-RES)
+        img_tag_wrapper = soup.find(id="imgTagWrapperId") or soup.select_one("#landingImage")
+        if img_tag_wrapper and img_tag_wrapper.get("data-a-dynamic-image"):
+            try:
+                dynamic_data = json.loads(img_tag_wrapper["data-a-dynamic-image"])
+                # Máxima resolución (mayor altura)
+                best_img = max(dynamic_data.items(), key=lambda x: x[1][1])[0]
+                img_url = best_img.replace("\\", "")
+                print(f"✅ Imagen hi-res: {img_url[:100]}...")
+            except Exception as e:
+                print(f"Error JSON imagen: {e}")
+
+        # 2. Fallbacks
         if not img_url:
-            landing_fallback = soup.select_one("#landingImage")
-            if landing_fallback:
-                img_url = landing_fallback.get("data-old-hires") or landing_fallback.get("src")
+            landing = soup.select_one("#landingImage")
+            if landing:
+                img_url = (landing.get("data-old-hires") or 
+                          landing.get("data-a-hires") or 
+                          landing.get("src"))
+        
         if not img_url:
             og_img = soup.select_one('meta[property="og:image"]')
             if og_img:
                 img_url = og_img.get("content")
+
+        print(f"Imagen final: {img_url}")  # DEBUG Railway logs
 
         return {
             "title": title,
@@ -163,31 +183,36 @@ async def process_source_message(event):
         f"🔰 {affiliate_url}"
     )
 
-    # --- PROCESAR IMAGEN ---
+    # --- PROCESAR IMAGEN MEJORADA ---
     if product["image"]:
         try:
             resp = session.get(product["image"], timeout=15)
+            content_type = resp.headers.get('content-type', '')
+            if not content_type.startswith('image/'):
+                raise ValueError(f"No imagen válida: {content_type}")
+            
             img = Image.open(BytesIO(resp.content)).convert("RGB")
 
-            # Redimensionar si demasiado grande (Telegram recomienda <= 1280x1280)
+            # Redimensionar (CORREGIDO: Resampling.LANCZOS)
             max_size = (1280, 1280)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)  # Actualizado: ANTIALIAS → Resampling.LANCZOS (PIL 10+)
+            img.thumbnail(max_size, Resampling.LANCZOS)
 
-            # Añadir marco naranja (#ffa500)
+            # Marco naranja
             border_color = (255, 165, 0)
             img = ImageOps.expand(img, border=10, fill=border_color)
 
             bio = BytesIO()
             bio.name = "product.jpg"
-            img.save(bio, "JPEG")
+            img.save(bio, "JPEG", quality=95)
             bio.seek(0)
 
             await client.send_file(target_channel, bio, caption=message, parse_mode="md")
-            print("✅ Oferta publicada con foto")
+            print("✅ Oferta publicada CON FOTO")
         except Exception as e:
-            print("Error publicando imagen:", e)
+            print(f"Error publicando imagen: {e}")
             await client.send_message(target_channel, message, parse_mode="md")
     else:
+        print("❌ Sin imagen disponible")
         await client.send_message(target_channel, message, parse_mode="md")
 
 # ==============================
@@ -226,17 +251,22 @@ async def process_target_message(event):
     if product["image"]:
         try:
             resp = session.get(product["image"], timeout=15)
+            content_type = resp.headers.get('content-type', '')
+            if not content_type.startswith('image/'):
+                raise ValueError(f"No imagen válida: {content_type}")
+            
             img = Image.open(BytesIO(resp.content)).convert("RGB")
             max_size = (1280, 1280)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)  # Actualizado
+            img.thumbnail(max_size, Resampling.LANCZOS)
             img = ImageOps.expand(img, border=10, fill=(255, 165, 0))
             bio = BytesIO()
             bio.name = "product.jpg"
-            img.save(bio, "JPEG")
+            img.save(bio, "JPEG", quality=95)
             bio.seek(0)
             await client.send_file(target_channel, bio, caption=message, parse_mode="md")
+            print("✅ Oferta desde paste CON FOTO")
         except Exception as e:
-            print("Error publicando imagen:", e)
+            print(f"Error imagen paste: {e}")
             await client.send_message(target_channel, message, parse_mode="md")
     else:
         await client.send_message(target_channel, message, parse_mode="md")
@@ -246,9 +276,10 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT ACTIVADO")
+    print("🤖 BOT CHOLLOS ACTIVADO v2.0")
     print(f"✅ Copia {source_channel} → {target_channel}")
-    print("✅ Generación automática de ofertas con fotos y enlaces afiliados")
+    print("✅ Ofertas con FOTOS hi-res + afiliados")
+    print("✅ Logs detallados para debug")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
