@@ -62,7 +62,6 @@ def extract_asin(url):
 
 def resolve_amazon_link(url):
     try:
-        # Usamos requests.get sin sesión persistente
         r = requests.get(url, headers=get_random_headers(), allow_redirects=True, timeout=15)
         final_url = r.url.split("?")[0]
         return extract_asin(final_url)
@@ -76,10 +75,8 @@ def build_affiliate_url(asin):
 def scrape_amazon_product(asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
-        # Petición limpia en cada llamada
         r = requests.get(url, headers=get_random_headers(), timeout=15)
         
-        # LOGS DE BLOQUEO DE AMAZON
         if r.status_code != 200:
             print(f"⚠️ Amazon devolvió código HTTP: {r.status_code}")
         if "captcha" in r.text.lower() or "validateCaptcha" in r.text:
@@ -104,9 +101,17 @@ def scrape_amazon_product(asin):
             price_alt = soup.select_one("#priceblock_ourprice") or soup.select_one("#priceblock_dealprice")
             price = price_alt.text.strip() if price_alt else None
 
-        # --- PRECIO ANTIGUO ---
-        old_price_elem = soup.select_one(".a-text-price .a-offscreen") or soup.select_one(".priceBlockStrikePriceString")
-        old_price = old_price_elem.text.strip() if old_price_elem else None
+        # --- PRECIO ANTIGUO (MODIFICADO AQUÍ) ---
+        old_price = None
+        # Convertimos todo el HTML a texto para buscar exactamente la frase
+        text_content = soup.get_text(separator=' ').replace('\xa0', ' ')
+        # Busca "Precio recomendado:" o "Precio anterior:" seguido del número
+        match = re.search(r'(?:Precio recomendado|Precio anterior):\s*([0-9.,]+[\s]*€?)', text_content, re.IGNORECASE)
+        if match:
+            old_price = match.group(1).strip()
+            # Si no trae el símbolo del euro, se lo añadimos
+            if '€' not in old_price:
+                old_price += '€'
 
         # --- RATING ---
         rating_elem = soup.select_one("#acrPopover")
@@ -182,7 +187,6 @@ async def process_source_message(event):
     if not asin:
         return
     
-    # PEQUEÑA PAUSA ANTI-BOT
     await asyncio.sleep(2)
     
     affiliate_url = build_affiliate_url(asin)
@@ -193,13 +197,18 @@ async def process_source_message(event):
     rating_text = product["rating"] if product["rating"] else ""
     reviews_text = product["reviews"] if product["reviews"] else ""
     price_text = product["price"].replace(",,", ",") if product["price"] else ""
-    old_price_text = product["old_price"] if product["old_price"] else ""
+    
+    # --- MODIFICADO: LÓGICA PARA MOSTRAR/OCULTAR PRECIO ANTERIOR ---
+    if product.get("old_price"):
+        price_line = f"🟢 **AHORA {price_text}** 🔴 ~~ANTES: {product['old_price']}~~"
+    else:
+        price_line = f"🟢 **AHORA {price_text}**"
 
     message = (
         f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n"
         f"**{product['title']}**\n"
         f"⭐ {rating_text} y {reviews_text}\n"
-        f"🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n"
+        f"{price_line}\n"
         f"🔰 {affiliate_url}"
     )
 
@@ -251,7 +260,6 @@ async def process_target_message(event):
 
     await event.delete()
     
-    # PEQUEÑA PAUSA ANTI-BOT
     await asyncio.sleep(2)
     
     affiliate_url = build_affiliate_url(asin)
@@ -262,13 +270,18 @@ async def process_target_message(event):
     rating_text = product["rating"] if product["rating"] else ""
     reviews_text = product["reviews"] if product["reviews"] else ""
     price_text = product["price"].replace(",,", ",") if product["price"] else ""
-    old_price_text = product["old_price"] if product["old_price"] else ""
+    
+    # --- MODIFICADO: LÓGICA PARA MOSTRAR/OCULTAR PRECIO ANTERIOR ---
+    if product.get("old_price"):
+        price_line = f"🟢 **AHORA {price_text}** 🔴 ~~ANTES: {product['old_price']}~~"
+    else:
+        price_line = f"🟢 **AHORA {price_text}**"
 
     message = (
         f"🔥🔥🔥 OFERTA AMAZON 🔥🔥🔥\n"
         f"**{product['title']}**\n"
         f"⭐ {rating_text} y {reviews_text}\n"
-        f"🟢 **AHORA {price_text}** 🔴 ~~ANTES: {old_price_text}~~\n"
+        f"{price_line}\n"
         f"🔰 {affiliate_url}"
     )
 
@@ -308,7 +321,7 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v2.3 (Anti-Bot) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v2.4 (Precios Mejorados) ACTIVADO ✅")
     print(f"✅ @chollosdeluxe → @solochollos10")
 
     @client.on(events.NewMessage(chats=source_channel))
