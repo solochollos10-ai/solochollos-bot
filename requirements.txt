@@ -3,5 +3,3 @@ requests==2.32.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
 pillow==10.0.1
-fake-useragent==1.5.1
-tenacity==8.5.0
