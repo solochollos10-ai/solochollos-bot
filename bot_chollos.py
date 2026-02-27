@@ -3,10 +3,10 @@ import asyncio
 import re
 import requests
 from bs4 import BeautifulSoup
-import json  # NUEVO: para data-a-dynamic-image
+import json
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from PIL import Image, ImageOps, Resampling  # NUEVO: Resampling
+from PIL import Image, ImageOps
 from io import BytesIO
 
 # ==============================
@@ -22,7 +22,7 @@ target_channel = "@solochollos10"
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
-# Sesión HTTP MEJORADA (anti-bloqueo)
+# Sesión HTTP MEJORADA
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -95,22 +95,21 @@ def scrape_amazon_product(asin):
             reviews_clean = re.sub(r"[^0-9\.]", "", reviews_elem.text.strip())
             reviews_text = f"{reviews_clean} opiniones"
 
-        # --- IMAGEN MEJORADA (ROBUSTA) ---
+        # --- IMAGEN MEJORADA ---
         img_url = None
         
-        # 1. data-a-dynamic-image (IMAGEN PRINCIPAL HI-RES)
+        # 1. data-a-dynamic-image (PRINCIPAL)
         img_tag_wrapper = soup.find(id="imgTagWrapperId") or soup.select_one("#landingImage")
         if img_tag_wrapper and img_tag_wrapper.get("data-a-dynamic-image"):
             try:
                 dynamic_data = json.loads(img_tag_wrapper["data-a-dynamic-image"])
-                # Máxima resolución (mayor altura)
                 best_img = max(dynamic_data.items(), key=lambda x: x[1][1])[0]
                 img_url = best_img.replace("\\", "")
                 print(f"✅ Imagen hi-res: {img_url[:100]}...")
             except Exception as e:
                 print(f"Error JSON imagen: {e}")
 
-        # 2. Fallbacks
+        # 2. Fallbacks múltiples
         if not img_url:
             landing = soup.select_one("#landingImage")
             if landing:
@@ -123,7 +122,7 @@ def scrape_amazon_product(asin):
             if og_img:
                 img_url = og_img.get("content")
 
-        print(f"Imagen final: {img_url}")  # DEBUG Railway logs
+        print(f"Imagen final: {img_url or 'NINGUNA'}")
 
         return {
             "title": title,
@@ -153,14 +152,14 @@ async def process_source_message(event):
     if not amazon_link:
         return
 
-    # Copia directa del enlace al canal
+    # Copia directa
     try:
         await client.send_message(target_channel, amazon_link)
-        print(f"🔗 Copiado enlace directo: {amazon_link}")
+        print(f"🔗 Copiado: {amazon_link}")
     except Exception as e:
-        print("Error enviando enlace directo:", e)
+        print("Error enlace directo:", e)
 
-    # Generar oferta completa
+    # Oferta completa
     asin = resolve_amazon_link(amazon_link)
     if not asin:
         return
@@ -171,7 +170,6 @@ async def process_source_message(event):
 
     rating_text = product["rating"] if product["rating"] else ""
     reviews_text = product["reviews"] if product["reviews"] else ""
-
     price_text = product["price"].replace(",,", ",") if product["price"] else ""
     old_price_text = product["old_price"] if product["old_price"] else ""
 
@@ -183,19 +181,20 @@ async def process_source_message(event):
         f"🔰 {affiliate_url}"
     )
 
-    # --- PROCESAR IMAGEN MEJORADA ---
+    # IMAGEN CON FALLBACK
     if product["image"]:
         try:
             resp = session.get(product["image"], timeout=15)
             content_type = resp.headers.get('content-type', '')
             if not content_type.startswith('image/'):
-                raise ValueError(f"No imagen válida: {content_type}")
+                print(f"❌ No imagen: {content_type}")
+                raise ValueError("No imagen válida")
             
             img = Image.open(BytesIO(resp.content)).convert("RGB")
 
-            # Redimensionar (CORREGIDO: Resampling.LANCZOS)
+            # Thumbnail COMPATIBLE (ANTIALIAS para tu versión PIL)
             max_size = (1280, 1280)
-            img.thumbnail(max_size, Resampling.LANCZOS)
+            img.thumbnail(max_size, Image.ANTIALIAS)
 
             # Marco naranja
             border_color = (255, 165, 0)
@@ -207,16 +206,16 @@ async def process_source_message(event):
             bio.seek(0)
 
             await client.send_file(target_channel, bio, caption=message, parse_mode="md")
-            print("✅ Oferta publicada CON FOTO")
+            print("✅ PUBLICADO CON FOTO")
         except Exception as e:
-            print(f"Error publicando imagen: {e}")
+            print(f"Error foto: {e}")
             await client.send_message(target_channel, message, parse_mode="md")
     else:
-        print("❌ Sin imagen disponible")
+        print("❌ Sin imagen")
         await client.send_message(target_channel, message, parse_mode="md")
 
 # ==============================
-# PROCESAR ENLACES PEGADOS EN TU CANAL
+# PROCESAR ENLACES PEGADOS
 # ==============================
 async def process_target_message(event):
     text = event.raw_text.strip()
@@ -227,7 +226,6 @@ async def process_target_message(event):
     if not asin:
         return
 
-    # Borrar mensaje original
     await event.delete()
     affiliate_url = build_affiliate_url(asin)
     product = scrape_amazon_product(asin)
@@ -247,26 +245,24 @@ async def process_target_message(event):
         f"🔰 {affiliate_url}"
     )
 
-    # --- PROCESAR IMAGEN ---
     if product["image"]:
         try:
             resp = session.get(product["image"], timeout=15)
             content_type = resp.headers.get('content-type', '')
             if not content_type.startswith('image/'):
-                raise ValueError(f"No imagen válida: {content_type}")
+                raise ValueError("No imagen válida")
             
             img = Image.open(BytesIO(resp.content)).convert("RGB")
             max_size = (1280, 1280)
-            img.thumbnail(max_size, Resampling.LANCZOS)
+            img.thumbnail(max_size, Image.ANTIALIAS)
             img = ImageOps.expand(img, border=10, fill=(255, 165, 0))
             bio = BytesIO()
             bio.name = "product.jpg"
             img.save(bio, "JPEG", quality=95)
             bio.seek(0)
             await client.send_file(target_channel, bio, caption=message, parse_mode="md")
-            print("✅ Oferta desde paste CON FOTO")
         except Exception as e:
-            print(f"Error imagen paste: {e}")
+            print(f"Error paste foto: {e}")
             await client.send_message(target_channel, message, parse_mode="md")
     else:
         await client.send_message(target_channel, message, parse_mode="md")
@@ -276,10 +272,9 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS ACTIVADO v2.0")
-    print(f"✅ Copia {source_channel} → {target_channel}")
-    print("✅ Ofertas con FOTOS hi-res + afiliados")
-    print("✅ Logs detallados para debug")
+    print("🤖 BOT CHOLLOS v2.1 ACTIVADO ✅")
+    print(f"✅ {source_channel} → {target_channel}")
+    print("✅ Fotos Amazon hi-res + afiliados")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
