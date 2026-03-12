@@ -838,8 +838,8 @@ def draw_price_with_strike(draw, x, y, text, font, color, stroke_fill, stroke_wi
 
 
 def fit_price_fonts(draw, max_width, old_price, now_price):
-    label_size = 44
-    value_size = 54
+    label_size = 100
+    value_size = 110
 
     while True:
         label_font = get_font(label_size, bold=True)
