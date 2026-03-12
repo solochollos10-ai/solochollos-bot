@@ -12,7 +12,7 @@ from html import escape
 from bs4 import BeautifulSoup
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 
 # ==============================
@@ -34,8 +34,11 @@ PRODUCT_RETRY_BASE_SECONDS = float(os.getenv("PRODUCT_RETRY_BASE_SECONDS", "1.8"
 REQUIRED_FIELDS = [x.strip() for x in os.getenv("REQUIRED_FIELDS", "title,price,image").split(",") if x.strip()]
 PAAPI_MIN_INTERVAL_SECONDS = float(os.getenv("PAAPI_MIN_INTERVAL_SECONDS", "1.1"))
 
-# Plantilla
+# ==============================
+# PLANTILLA / COMPOSICIÓN
+# ==============================
 TEMPLATE_IMAGE_PATH = os.getenv("TEMPLATE_IMAGE_PATH", "plantilla.jpg")
+
 SAFE_MARGIN_LEFT = int(os.getenv("SAFE_MARGIN_LEFT", "35"))
 SAFE_MARGIN_RIGHT = int(os.getenv("SAFE_MARGIN_RIGHT", "35"))
 SAFE_MARGIN_TOP = int(os.getenv("SAFE_MARGIN_TOP", "125"))
@@ -45,6 +48,18 @@ PRODUCT_SCALE_BOOST = float(os.getenv("PRODUCT_SCALE_BOOST", "1.15"))
 PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "0"))
 OUTPUT_BG_COLOR = tuple(map(int, os.getenv("OUTPUT_BG_COLOR", "255,255,255").split(",")))
 OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
+
+# Bloque de precios: se dibuja a la izquierda del zorro
+PRICE_BOX_WIDTH_RATIO = float(os.getenv("PRICE_BOX_WIDTH_RATIO", "0.26"))
+PRICE_BOX_HEIGHT_RATIO = float(os.getenv("PRICE_BOX_HEIGHT_RATIO", "0.18"))
+PRICE_BOX_RIGHT_MARGIN_RATIO = float(os.getenv("PRICE_BOX_RIGHT_MARGIN_RATIO", "0.20"))
+PRICE_BOX_BOTTOM_MARGIN_RATIO = float(os.getenv("PRICE_BOX_BOTTOM_MARGIN_RATIO", "0.07"))
+
+PRICE_BOX_FILL = tuple(map(int, os.getenv("PRICE_BOX_FILL", "255,255,255,220").split(",")))
+PRICE_BOX_OUTLINE = tuple(map(int, os.getenv("PRICE_BOX_OUTLINE", "255,255,255,0").split(",")))
+PRICE_LABEL_COLOR = tuple(map(int, os.getenv("PRICE_LABEL_COLOR", "95,95,95,255").split(",")))
+PRICE_OLD_COLOR = tuple(map(int, os.getenv("PRICE_OLD_COLOR", "120,120,120,255").split(",")))
+PRICE_NOW_COLOR = tuple(map(int, os.getenv("PRICE_NOW_COLOR", "232,108,17,255").split(",")))
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
@@ -83,13 +98,11 @@ def normalize_price(text):
 
     text = clean_text(text)
     text = text.replace("€", "").replace("EUR", "").replace("\u202f", " ").replace("\xa0", " ").strip()
-
     m = re.search(r"(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:,\d{2})|\d+(?:\.\d{2}))", text)
     if not m:
         return None
 
     value = m.group(1).replace(" ", "")
-
     if "," in value:
         value = value.replace(".", "").replace(",", ".")
     else:
@@ -455,7 +468,6 @@ def resolve_amazon_link(url):
             return extract_asin(loc)
 
         return None
-
     except Exception as e:
         print(f"Error resolviendo enlace: {e}")
         return None
@@ -466,7 +478,7 @@ def build_affiliate_url(asin):
 
 
 # ==============================
-# AMAZON PA-API (GetItems)
+# AMAZON PA-API
 # ==============================
 PAAPI_HOST = "webservices.amazon.es"
 PAAPI_REGION = "eu-west-1"
@@ -612,7 +624,6 @@ def paapi_get_product_sync(asin):
             "reviews": reviews_text,
             "image": img_url
         }
-
     except Exception as e:
         print(f"Error PAAPI: {e}")
         return None
@@ -638,7 +649,7 @@ async def paapi_get_product_throttled(asin):
 
 
 # ==============================
-# AMAZON HTML SCRAPING
+# SCRAPING HTML AMAZON
 # ==============================
 def scrape_amazon_page_sync(url):
     try:
@@ -685,7 +696,6 @@ def scrape_amazon_product_html_sync(asin):
     for url in urls:
         data = scrape_amazon_page_sync(url)
         merged = merge_products(merged, data)
-
         if merged.get("title") and merged.get("price") and merged.get("image"):
             break
 
@@ -707,7 +717,6 @@ def product_missing_fields(product, required_fields):
         v = product.get(k)
         if v is None or (isinstance(v, str) and not v.strip()):
             missing.append(k)
-
     return missing
 
 
@@ -733,7 +742,7 @@ async def fetch_product_complete(asin):
 
 
 # ==============================
-# IMAGEN FINAL DENTRO DE PLANTILLA
+# IMAGEN FINAL
 # ==============================
 def get_resample_filter():
     try:
@@ -768,7 +777,97 @@ def scale_image(img, factor):
     return img.resize((new_w, new_h), get_resample_filter())
 
 
-def compose_product_on_template(product_img):
+def get_font(size, bold=False):
+    candidates = []
+    if bold:
+        candidates.extend([
+            "DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ])
+    else:
+        candidates.extend([
+            "DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ])
+
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            continue
+
+    return ImageFont.load_default()
+
+
+def text_size(draw, text, font):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def draw_old_price_with_strike(draw, x, y, text, font, color):
+    draw.text((x, y), text, font=font, fill=color)
+    w, h = text_size(draw, text, font)
+    line_y = y + h // 2
+    draw.line((x, line_y, x + w, line_y), fill=color, width=max(1, font.size // 12))
+
+
+def draw_price_block(base_img, product):
+    now_price = product.get("price") or ""
+    old_price = product.get("old_price") or ""
+
+    if not now_price and not old_price:
+        return base_img
+
+    img = base_img.convert("RGBA")
+    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    width, height = img.size
+
+    box_width = int(width * PRICE_BOX_WIDTH_RATIO)
+    box_height = int(height * PRICE_BOX_HEIGHT_RATIO)
+    box_right_margin = int(width * PRICE_BOX_RIGHT_MARGIN_RATIO)
+    box_bottom_margin = int(height * PRICE_BOX_BOTTOM_MARGIN_RATIO)
+
+    x2 = width - box_right_margin
+    x1 = x2 - box_width
+    y2 = height - box_bottom_margin
+    y1 = y2 - box_height
+
+    corner = max(12, int(min(width, height) * 0.02))
+    pad_x = max(12, int(width * 0.018))
+    pad_y = max(10, int(height * 0.014))
+
+    label_font = get_font(max(14, int(width * 0.024)), bold=True)
+    old_font = get_font(max(16, int(width * 0.032)), bold=False)
+    now_font = get_font(max(22, int(width * 0.040)), bold=True)
+
+    draw.rounded_rectangle(
+        [x1, y1, x2, y2],
+        radius=corner,
+        fill=PRICE_BOX_FILL,
+        outline=PRICE_BOX_OUTLINE,
+        width=1
+    )
+
+    current_y = y1 + pad_y
+
+    if old_price:
+        draw.text((x1 + pad_x, current_y), "ANTES", font=label_font, fill=PRICE_LABEL_COLOR)
+        current_y += text_size(draw, "ANTES", label_font)[1] + max(2, int(height * 0.004))
+        draw_old_price_with_strike(draw, x1 + pad_x, current_y, old_price, old_font, PRICE_OLD_COLOR)
+        current_y += text_size(draw, old_price, old_font)[1] + max(8, int(height * 0.012))
+
+    if now_price:
+        draw.text((x1 + pad_x, current_y), "AHORA", font=label_font, fill=PRICE_LABEL_COLOR)
+        current_y += text_size(draw, "AHORA", label_font)[1] + max(2, int(height * 0.004))
+        draw.text((x1 + pad_x, current_y), now_price, font=now_font, fill=PRICE_NOW_COLOR)
+
+    img = Image.alpha_composite(img, overlay)
+    return img.convert("RGB")
+
+
+def compose_product_on_template(product_img, product):
     template = open_template_image()
     product_img = product_img.convert("RGB")
 
@@ -793,8 +892,9 @@ def compose_product_on_template(product_img):
 
     x = usable_left + (usable_width - final_product.width) // 2
     y = usable_top + (usable_height - final_product.height) // 2
-
     canvas.paste(final_product, (x, y))
+
+    canvas = draw_price_block(canvas, product)
     return canvas
 
 
@@ -862,7 +962,7 @@ async def publish_offer(target, product, affiliate_url):
             raise ValueError(f"Contenido no imagen: {content_type}")
 
         product_img = Image.open(BytesIO(resp.content)).convert("RGB")
-        final_img = compose_product_on_template(product_img)
+        final_img = compose_product_on_template(product_img, product)
 
         bio = BytesIO()
         bio.name = "product_template.jpg"
@@ -871,7 +971,6 @@ async def publish_offer(target, product, affiliate_url):
 
         await safe_send_file(target, bio, caption=message, parse_mode="html")
         return True
-
     except Exception as e:
         print(f"Error publicando imagen: {e}")
         await safe_send_message(target, message, parse_mode="html")
@@ -942,12 +1041,13 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.1.1 (ASIN fix + fallback robusto) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.2 (precios impresos en plantilla) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
     print(f"✅ SAFE ZONE: left={SAFE_MARGIN_LEFT}, right={SAFE_MARGIN_RIGHT}, top={SAFE_MARGIN_TOP}, bottom={SAFE_MARGIN_BOTTOM}")
     print(f"✅ PRODUCT_SCALE_BOOST={PRODUCT_SCALE_BOOST} | PRODUCT_BORDER={PRODUCT_BORDER}")
+    print(f"✅ PRICE BOX ratios: width={PRICE_BOX_WIDTH_RATIO}, height={PRICE_BOX_HEIGHT_RATIO}, right_margin={PRICE_BOX_RIGHT_MARGIN_RATIO}, bottom_margin={PRICE_BOX_BOTTOM_MARGIN_RATIO}")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
