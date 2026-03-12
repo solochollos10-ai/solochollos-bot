@@ -49,17 +49,20 @@ PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "0"))
 OUTPUT_BG_COLOR = tuple(map(int, os.getenv("OUTPUT_BG_COLOR", "255,255,255").split(",")))
 OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
 
-# Bloque de precios: se dibuja a la izquierda del zorro
-PRICE_BOX_WIDTH_RATIO = float(os.getenv("PRICE_BOX_WIDTH_RATIO", "0.26"))
-PRICE_BOX_HEIGHT_RATIO = float(os.getenv("PRICE_BOX_HEIGHT_RATIO", "0.18"))
-PRICE_BOX_RIGHT_MARGIN_RATIO = float(os.getenv("PRICE_BOX_RIGHT_MARGIN_RATIO", "0.20"))
-PRICE_BOX_BOTTOM_MARGIN_RATIO = float(os.getenv("PRICE_BOX_BOTTOM_MARGIN_RATIO", "0.07"))
+# ==============================
+# BLOQUE DE PRECIOS
+# Ajustado para quedar a la izquierda del zorro
+# ==============================
+PRICE_BOX_WIDTH_RATIO = float(os.getenv("PRICE_BOX_WIDTH_RATIO", "0.18"))
+PRICE_BOX_HEIGHT_RATIO = float(os.getenv("PRICE_BOX_HEIGHT_RATIO", "0.135"))
+PRICE_BOX_RIGHT_MARGIN_RATIO = float(os.getenv("PRICE_BOX_RIGHT_MARGIN_RATIO", "0.245"))
+PRICE_BOX_BOTTOM_MARGIN_RATIO = float(os.getenv("PRICE_BOX_BOTTOM_MARGIN_RATIO", "0.060"))
 
-PRICE_BOX_FILL = tuple(map(int, os.getenv("PRICE_BOX_FILL", "255,255,255,220").split(",")))
+PRICE_BOX_FILL = tuple(map(int, os.getenv("PRICE_BOX_FILL", "255,255,255,235").split(",")))
 PRICE_BOX_OUTLINE = tuple(map(int, os.getenv("PRICE_BOX_OUTLINE", "255,255,255,0").split(",")))
-PRICE_LABEL_COLOR = tuple(map(int, os.getenv("PRICE_LABEL_COLOR", "95,95,95,255").split(",")))
-PRICE_OLD_COLOR = tuple(map(int, os.getenv("PRICE_OLD_COLOR", "120,120,120,255").split(",")))
-PRICE_NOW_COLOR = tuple(map(int, os.getenv("PRICE_NOW_COLOR", "232,108,17,255").split(",")))
+PRICE_LABEL_COLOR = tuple(map(int, os.getenv("PRICE_LABEL_COLOR", "55,55,55,255").split(",")))
+PRICE_OLD_COLOR = tuple(map(int, os.getenv("PRICE_OLD_COLOR", "220,25,25,255").split(",")))
+PRICE_NOW_COLOR = tuple(map(int, os.getenv("PRICE_NOW_COLOR", "0,170,60,255").split(",")))
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
@@ -799,16 +802,65 @@ def get_font(size, bold=False):
     return ImageFont.load_default()
 
 
+def text_bbox(draw, text, font):
+    return draw.textbbox((0, 0), text, font=font)
+
+
 def text_size(draw, text, font):
-    bbox = draw.textbbox((0, 0), text, font=font)
+    bbox = text_bbox(draw, text, font)
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def centered_x(draw, box_x1, box_x2, text, font):
+    w, _ = text_size(draw, text, font)
+    return box_x1 + ((box_x2 - box_x1 - w) // 2)
 
 
 def draw_old_price_with_strike(draw, x, y, text, font, color):
     draw.text((x, y), text, font=font, fill=color)
     w, h = text_size(draw, text, font)
     line_y = y + h // 2
-    draw.line((x, line_y, x + w, line_y), fill=color, width=max(1, font.size // 12))
+    draw.line((x, line_y, x + w, line_y), fill=color, width=max(2, font.size // 10))
+
+
+def fit_price_fonts(draw, box_w, box_h, old_price, now_price):
+    label_size = max(22, int(box_w * 0.16))
+    old_size = max(30, int(box_w * 0.24))
+    now_size = max(38, int(box_w * 0.30))
+
+    while True:
+        label_font = get_font(label_size, bold=True)
+        old_font = get_font(old_size, bold=True)
+        now_font = get_font(now_size, bold=True)
+
+        top_gap = max(4, int(box_h * 0.03))
+        gap_small = max(2, int(box_h * 0.015))
+        gap_mid = max(4, int(box_h * 0.035))
+
+        total_h = top_gap
+        max_w = 0
+
+        if old_price:
+            w1, h1 = text_size(draw, "ANTES", label_font)
+            w2, h2 = text_size(draw, old_price, old_font)
+            total_h += h1 + gap_small + h2 + gap_mid
+            max_w = max(max_w, w1, w2)
+
+        if now_price:
+            w3, h3 = text_size(draw, "AHORA", label_font)
+            w4, h4 = text_size(draw, now_price, now_font)
+            total_h += h3 + gap_small + h4 + top_gap
+            max_w = max(max_w, w3, w4)
+
+        if total_h <= box_h * 0.92 and max_w <= box_w * 0.88:
+            return label_font, old_font, now_font
+
+        label_size = max(12, int(label_size * 0.92))
+        old_size = max(14, int(old_size * 0.92))
+        now_size = max(16, int(now_size * 0.92))
+
+        if label_size <= 12 and old_size <= 14 and now_size <= 16:
+            return label_font, old_font, now_font
 
 
 def draw_price_block(base_img, product):
@@ -834,13 +886,7 @@ def draw_price_block(base_img, product):
     y2 = height - box_bottom_margin
     y1 = y2 - box_height
 
-    corner = max(12, int(min(width, height) * 0.02))
-    pad_x = max(12, int(width * 0.018))
-    pad_y = max(10, int(height * 0.014))
-
-    label_font = get_font(max(14, int(width * 0.024)), bold=True)
-    old_font = get_font(max(16, int(width * 0.032)), bold=False)
-    now_font = get_font(max(22, int(width * 0.040)), bold=True)
+    corner = max(10, int(min(width, height) * 0.015))
 
     draw.rounded_rectangle(
         [x1, y1, x2, y2],
@@ -850,18 +896,59 @@ def draw_price_block(base_img, product):
         width=1
     )
 
-    current_y = y1 + pad_y
+    inner_margin_x = max(8, int(box_width * 0.06))
+    inner_margin_y = max(6, int(box_height * 0.06))
+
+    inner_x1 = x1 + inner_margin_x
+    inner_x2 = x2 - inner_margin_x
+    inner_y1 = y1 + inner_margin_y
+    inner_y2 = y2 - inner_margin_y
+
+    inner_w = inner_x2 - inner_x1
+    inner_h = inner_y2 - inner_y1
+
+    label_font, old_font, now_font = fit_price_fonts(draw, inner_w, inner_h, old_price, now_price)
+
+    gap_small = max(2, int(inner_h * 0.03))
+    gap_mid = max(4, int(inner_h * 0.06))
+
+    total_h = 0
+    sections = []
 
     if old_price:
-        draw.text((x1 + pad_x, current_y), "ANTES", font=label_font, fill=PRICE_LABEL_COLOR)
-        current_y += text_size(draw, "ANTES", label_font)[1] + max(2, int(height * 0.004))
-        draw_old_price_with_strike(draw, x1 + pad_x, current_y, old_price, old_font, PRICE_OLD_COLOR)
-        current_y += text_size(draw, old_price, old_font)[1] + max(8, int(height * 0.012))
+        _, h1 = text_size(draw, "ANTES", label_font)
+        _, h2 = text_size(draw, old_price, old_font)
+        sections.append(("ANTES", old_price, h1, h2))
+        total_h += h1 + gap_small + h2
 
     if now_price:
-        draw.text((x1 + pad_x, current_y), "AHORA", font=label_font, fill=PRICE_LABEL_COLOR)
-        current_y += text_size(draw, "AHORA", label_font)[1] + max(2, int(height * 0.004))
-        draw.text((x1 + pad_x, current_y), now_price, font=now_font, fill=PRICE_NOW_COLOR)
+        _, h3 = text_size(draw, "AHORA", label_font)
+        _, h4 = text_size(draw, now_price, now_font)
+        if sections:
+            total_h += gap_mid
+        sections.append(("AHORA", now_price, h3, h4))
+        total_h += h3 + gap_small + h4
+
+    current_y = inner_y1 + ((inner_h - total_h) // 2)
+
+    for idx, (label, value, _, _) in enumerate(sections):
+        label_x = centered_x(draw, inner_x1, inner_x2, label, label_font)
+        draw.text((label_x, current_y), label, font=label_font, fill=PRICE_LABEL_COLOR)
+        current_y += text_size(draw, label, label_font)[1] + gap_small
+
+        value_font = old_font if label == "ANTES" else now_font
+        value_color = PRICE_OLD_COLOR if label == "ANTES" else PRICE_NOW_COLOR
+        value_x = centered_x(draw, inner_x1, inner_x2, value, value_font)
+
+        if label == "ANTES":
+            draw_old_price_with_strike(draw, value_x, current_y, value, value_font, value_color)
+        else:
+            draw.text((value_x, current_y), value, font=value_font, fill=value_color)
+
+        current_y += text_size(draw, value, value_font)[1]
+
+        if idx < len(sections) - 1:
+            current_y += gap_mid
 
     img = Image.alpha_composite(img, overlay)
     return img.convert("RGB")
@@ -1041,7 +1128,7 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.2 (precios impresos en plantilla) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.3 (box precios compacto y centrado) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
