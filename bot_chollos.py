@@ -51,11 +51,11 @@ OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
 
 # ==============================
 # BLOQUE DE PRECIOS
-# Ajustado para quedar a la izquierda del zorro
+# Más grande y todavía a la izquierda del zorro
 # ==============================
-PRICE_BOX_WIDTH_RATIO = float(os.getenv("PRICE_BOX_WIDTH_RATIO", "0.18"))
-PRICE_BOX_HEIGHT_RATIO = float(os.getenv("PRICE_BOX_HEIGHT_RATIO", "0.135"))
-PRICE_BOX_RIGHT_MARGIN_RATIO = float(os.getenv("PRICE_BOX_RIGHT_MARGIN_RATIO", "0.245"))
+PRICE_BOX_WIDTH_RATIO = float(os.getenv("PRICE_BOX_WIDTH_RATIO", "0.24"))
+PRICE_BOX_HEIGHT_RATIO = float(os.getenv("PRICE_BOX_HEIGHT_RATIO", "0.19"))
+PRICE_BOX_RIGHT_MARGIN_RATIO = float(os.getenv("PRICE_BOX_RIGHT_MARGIN_RATIO", "0.255"))
 PRICE_BOX_BOTTOM_MARGIN_RATIO = float(os.getenv("PRICE_BOX_BOTTOM_MARGIN_RATIO", "0.060"))
 
 PRICE_BOX_FILL = tuple(map(int, os.getenv("PRICE_BOX_FILL", "255,255,255,235").split(",")))
@@ -824,20 +824,19 @@ def draw_old_price_with_strike(draw, x, y, text, font, color):
 
 
 def fit_price_fonts(draw, box_w, box_h, old_price, now_price):
-    label_size = max(22, int(box_w * 0.16))
-    old_size = max(30, int(box_w * 0.24))
-    now_size = max(38, int(box_w * 0.30))
+    label_size = max(54, int(box_w * 0.34))
+    old_size = max(72, int(box_w * 0.46))
+    now_size = max(90, int(box_w * 0.58))
 
     while True:
         label_font = get_font(label_size, bold=True)
         old_font = get_font(old_size, bold=True)
         now_font = get_font(now_size, bold=True)
 
-        top_gap = max(4, int(box_h * 0.03))
-        gap_small = max(2, int(box_h * 0.015))
-        gap_mid = max(4, int(box_h * 0.035))
+        gap_small = max(4, int(box_h * 0.02))
+        gap_mid = max(8, int(box_h * 0.045))
 
-        total_h = top_gap
+        total_h = 0
         max_w = 0
 
         if old_price:
@@ -849,17 +848,17 @@ def fit_price_fonts(draw, box_w, box_h, old_price, now_price):
         if now_price:
             w3, h3 = text_size(draw, "AHORA", label_font)
             w4, h4 = text_size(draw, now_price, now_font)
-            total_h += h3 + gap_small + h4 + top_gap
+            total_h += h3 + gap_small + h4
             max_w = max(max_w, w3, w4)
 
-        if total_h <= box_h * 0.92 and max_w <= box_w * 0.88:
+        if total_h <= box_h * 0.92 and max_w <= box_w * 0.90:
             return label_font, old_font, now_font
 
-        label_size = max(12, int(label_size * 0.92))
-        old_size = max(14, int(old_size * 0.92))
-        now_size = max(16, int(now_size * 0.92))
+        label_size = max(18, int(label_size * 0.92))
+        old_size = max(22, int(old_size * 0.92))
+        now_size = max(26, int(now_size * 0.92))
 
-        if label_size <= 12 and old_size <= 14 and now_size <= 16:
+        if label_size <= 18 and old_size <= 22 and now_size <= 26:
             return label_font, old_font, now_font
 
 
@@ -1128,7 +1127,7 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.3 (box precios compacto y centrado) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.4 (precios 3x más grandes) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
