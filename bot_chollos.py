@@ -12,7 +12,7 @@ from html import escape
 from bs4 import BeautifulSoup
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from io import BytesIO
 
 # ==============================
@@ -48,31 +48,6 @@ PRODUCT_SCALE_BOOST = float(os.getenv("PRODUCT_SCALE_BOOST", "1.15"))
 PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "0"))
 OUTPUT_BG_COLOR = tuple(map(int, os.getenv("OUTPUT_BG_COLOR", "255,255,255").split(",")))
 OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
-
-# ==============================
-# POSICIÓN / TAMAÑO DE PRECIOS
-# ==============================
-PRICE_BLOCK_LEFT_RATIO = float(os.getenv("PRICE_BLOCK_LEFT_RATIO", "0.26"))
-PRICE_BLOCK_BOTTOM_RATIO = float(os.getenv("PRICE_BLOCK_BOTTOM_RATIO", "0.050"))
-PRICE_BLOCK_WIDTH_RATIO = float(os.getenv("PRICE_BLOCK_WIDTH_RATIO", "0.58"))
-PRICE_LINE_GAP_RATIO = float(os.getenv("PRICE_LINE_GAP_RATIO", "0.004"))
-PRICE_LABEL_VALUE_GAP_RATIO = float(os.getenv("PRICE_LABEL_VALUE_GAP_RATIO", "0.022"))
-PRICE_INLINE_GAP_RATIO = float(os.getenv("PRICE_INLINE_GAP_RATIO", "0.030"))
-
-# Tamaños fáciles de tocar
-PRICE_BASE_LABEL_SIZE = int(os.getenv("PRICE_BASE_LABEL_SIZE", "100"))
-PRICE_BASE_VALUE_SIZE = int(os.getenv("PRICE_BASE_VALUE_SIZE", "110"))
-PRICE_MIN_LABEL_SIZE = int(os.getenv("PRICE_MIN_LABEL_SIZE", "40"))
-PRICE_MIN_VALUE_SIZE = int(os.getenv("PRICE_MIN_VALUE_SIZE", "48"))
-PRICE_SHRINK_FACTOR = float(os.getenv("PRICE_SHRINK_FACTOR", "0.98"))
-
-PRICE_LABEL_COLOR = tuple(map(int, os.getenv("PRICE_LABEL_COLOR", "0,0,0,255").split(",")))
-PRICE_OLD_COLOR = tuple(map(int, os.getenv("PRICE_OLD_COLOR", "220,25,25,255").split(",")))
-PRICE_NOW_COLOR = tuple(map(int, os.getenv("PRICE_NOW_COLOR", "35,170,70,255").split(",")))
-
-PRICE_LABEL_STROKE_COLOR = tuple(map(int, os.getenv("PRICE_LABEL_STROKE_COLOR", "255,255,255,0").split(",")))
-PRICE_OLD_STROKE_COLOR = tuple(map(int, os.getenv("PRICE_OLD_STROKE_COLOR", "255,255,255,0").split(",")))
-PRICE_NOW_STROKE_COLOR = tuple(map(int, os.getenv("PRICE_NOW_STROKE_COLOR", "255,255,255,0").split(",")))
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
@@ -790,170 +765,7 @@ def scale_image(img, factor):
     return img.resize((new_w, new_h), get_resample_filter())
 
 
-def get_font(size, bold=False):
-    candidates = []
-    if bold:
-        candidates.extend([
-            "DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ])
-    else:
-        candidates.extend([
-            "DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ])
-
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except Exception:
-            continue
-
-    return ImageFont.load_default()
-
-
-def text_bbox(draw, text, font, stroke_width=0):
-    return draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
-
-
-def text_size(draw, text, font, stroke_width=0):
-    bbox = text_bbox(draw, text, font, stroke_width=stroke_width)
-    return bbox[2] - bbox[0], bbox[3] - bbox[1]
-
-
-def draw_text(draw, xy, text, font, fill, stroke_fill=(255, 255, 255, 0), stroke_width=0):
-    draw.text(
-        xy,
-        text,
-        font=font,
-        fill=fill,
-        stroke_width=stroke_width,
-        stroke_fill=stroke_fill
-    )
-
-
-def draw_price_with_strike(draw, x, y, text, font, color, stroke_fill, stroke_width):
-    draw_text(draw, (x, y), text, font, color, stroke_fill, stroke_width)
-    w, h = text_size(draw, text, font, stroke_width=stroke_width)
-    line_y = y + h // 2
-    draw.line(
-        (x, line_y, x + w, line_y),
-        fill=color,
-        width=max(3, font.size // 10)
-    )
-
-
-def fit_price_fonts(draw, max_width, old_price, now_price):
-    label_size = PRICE_BASE_LABEL_SIZE
-    value_size = PRICE_BASE_VALUE_SIZE
-
-    while True:
-        label_font = get_font(label_size, bold=True)
-        value_font = get_font(value_size, bold=True)
-
-        old_label_w, _ = text_size(draw, "ANTES", label_font)
-        now_label_w, _ = text_size(draw, "AHORA", label_font)
-        old_value_w, _ = text_size(draw, old_price or "", value_font)
-        now_value_w, _ = text_size(draw, now_price or "", value_font)
-
-        gap_inline = max(12, int(max_width * PRICE_INLINE_GAP_RATIO))
-        line1_w = old_label_w + gap_inline + old_value_w if old_price else 0
-        line2_w = now_label_w + gap_inline + now_value_w if now_price else 0
-
-        if max(line1_w, line2_w, 1) <= max_width:
-            return label_font, value_font
-
-        label_size = max(PRICE_MIN_LABEL_SIZE, int(label_size * PRICE_SHRINK_FACTOR))
-        value_size = max(PRICE_MIN_VALUE_SIZE, int(value_size * PRICE_SHRINK_FACTOR))
-
-        if label_size <= PRICE_MIN_LABEL_SIZE and value_size <= PRICE_MIN_VALUE_SIZE:
-            return label_font, value_font
-
-
-def draw_prices_on_template(base_img, product):
-    now_price = product.get("price") or ""
-    old_price = product.get("old_price") or ""
-
-    if not now_price and not old_price:
-        return base_img
-
-    img = base_img.convert("RGBA")
-    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    width, height = img.size
-
-    block_x = int(width * PRICE_BLOCK_LEFT_RATIO)
-    block_bottom = int(height * (1 - PRICE_BLOCK_BOTTOM_RATIO))
-    block_w = int(width * PRICE_BLOCK_WIDTH_RATIO)
-
-    label_font, value_font = fit_price_fonts(draw, block_w, old_price, now_price)
-
-    stroke_label = 0
-    stroke_price = 0
-
-    gap_inline = max(10, int(width * PRICE_INLINE_GAP_RATIO))
-    gap_lines = max(0, int(height * PRICE_LINE_GAP_RATIO))
-    gap_label_value = max(2, int(height * PRICE_LABEL_VALUE_GAP_RATIO * 0.2))
-
-    old_label_h = text_size(draw, "ANTES", label_font, stroke_width=stroke_label)[1] if old_price else 0
-    old_value_h = text_size(draw, old_price, value_font, stroke_width=stroke_price)[1] if old_price else 0
-    now_label_h = text_size(draw, "AHORA", label_font, stroke_width=stroke_label)[1] if now_price else 0
-    now_value_h = text_size(draw, now_price, value_font, stroke_width=stroke_price)[1] if now_price else 0
-
-    line1_h = max(old_label_h, old_value_h)
-    line2_h = max(now_label_h, now_value_h)
-    total_h = line1_h + gap_lines + line2_h if old_price and now_price else max(line1_h, line2_h)
-
-    y_start = block_bottom - total_h
-
-    if old_price:
-        old_label_w = text_size(draw, "ANTES", label_font, stroke_width=stroke_label)[0]
-        old_value_w = text_size(draw, old_price, value_font, stroke_width=stroke_price)[0]
-        line1_w = old_label_w + gap_inline + old_value_w
-        x1 = block_x + max(0, (block_w - line1_w) // 2)
-
-        label_y = y_start + max(0, (line1_h - old_label_h) // 2) - gap_label_value
-        value_y = y_start + max(0, (line1_h - old_value_h) // 2)
-
-        draw_text(draw, (x1, label_y), "ANTES", label_font, PRICE_LABEL_COLOR, PRICE_LABEL_STROKE_COLOR, stroke_label)
-        draw_price_with_strike(
-            draw,
-            x1 + old_label_w + gap_inline,
-            value_y,
-            old_price,
-            value_font,
-            PRICE_OLD_COLOR,
-            PRICE_OLD_STROKE_COLOR,
-            stroke_price
-        )
-
-    if now_price:
-        y2 = y_start + line1_h + gap_lines if old_price else y_start
-        now_label_w = text_size(draw, "AHORA", label_font, stroke_width=stroke_label)[0]
-        now_value_w = text_size(draw, now_price, value_font, stroke_width=stroke_price)[0]
-        line2_w = now_label_w + gap_inline + now_value_w
-        x2 = block_x + max(0, (block_w - line2_w) // 2)
-
-        label_y2 = y2 + max(0, (line2_h - now_label_h) // 2) - gap_label_value
-        value_y2 = y2 + max(0, (line2_h - now_value_h) // 2)
-
-        draw_text(draw, (x2, label_y2), "AHORA", label_font, PRICE_LABEL_COLOR, PRICE_LABEL_STROKE_COLOR, stroke_label)
-        draw_text(
-            draw,
-            (x2 + now_label_w + gap_inline, value_y2),
-            now_price,
-            value_font,
-            PRICE_NOW_COLOR,
-            PRICE_NOW_STROKE_COLOR,
-            stroke_price
-        )
-
-    img = Image.alpha_composite(img, overlay)
-    return img.convert("RGB")
-
-
-def compose_product_on_template(product_img, product):
+def compose_product_on_template(product_img, product=None):
     template = open_template_image()
     product_img = product_img.convert("RGB")
 
@@ -980,7 +792,6 @@ def compose_product_on_template(product_img, product):
     y = usable_top + (usable_height - final_product.height) // 2
     canvas.paste(final_product, (x, y))
 
-    canvas = draw_prices_on_template(canvas, product)
     return canvas
 
 
@@ -1127,14 +938,12 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.5 (precios ampliados) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.6 (sin precios en imagen) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
     print(f"✅ SAFE ZONE: left={SAFE_MARGIN_LEFT}, right={SAFE_MARGIN_RIGHT}, top={SAFE_MARGIN_TOP}, bottom={SAFE_MARGIN_BOTTOM}")
     print(f"✅ PRODUCT_SCALE_BOOST={PRODUCT_SCALE_BOOST} | PRODUCT_BORDER={PRODUCT_BORDER}")
-    print(f"✅ PRICE TEXT AREA: left={PRICE_BLOCK_LEFT_RATIO}, bottom={PRICE_BLOCK_BOTTOM_RATIO}, width={PRICE_BLOCK_WIDTH_RATIO}")
-    print(f"✅ PRICE FONT BASE: label={PRICE_BASE_LABEL_SIZE}, value={PRICE_BASE_VALUE_SIZE}, shrink={PRICE_SHRINK_FACTOR}")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
