@@ -103,6 +103,57 @@ def normalize_price(text):
         return None
 
 
+def price_to_float(price_text):
+    if not price_text:
+        return None
+
+    txt = clean_text(str(price_text))
+    txt = txt.replace("€", "").replace("EUR", "").replace("\u202f", " ").replace("\xa0", " ").strip()
+
+    m = re.search(r"(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:,\d{2})|\d+(?:\.\d{2})|\d+)", txt)
+    if not m:
+        return None
+
+    value = m.group(1).replace(" ", "")
+    if "," in value:
+        value = value.replace(".", "").replace(",", ".")
+    else:
+        if value.count(".") > 1:
+            value = value.replace(".", "")
+
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def has_invalid_price_relation(product):
+    if not product:
+        return False
+
+    now_price = price_to_float(product.get("price"))
+    old_price = price_to_float(product.get("old_price"))
+
+    if now_price is None or old_price is None:
+        return False
+
+    return old_price < now_price
+
+
+def sanitize_price_relation(product):
+    if not product:
+        return product
+
+    cleaned = dict(product)
+    if has_invalid_price_relation(cleaned):
+        print(
+            f"⚠️ old_price inválido detectado y eliminado antes de publicar. "
+            f"old_price={cleaned.get('old_price')} | price={cleaned.get('price')}"
+        )
+        cleaned["old_price"] = None
+    return cleaned
+
+
 def normalize_rating(text):
     text = clean_text(text).replace(",", ".")
     m = re.search(r"(\d+(?:\.\d)?)", text)
@@ -716,17 +767,30 @@ async def fetch_product_complete(asin):
         last_product = prod
 
         missing = product_missing_fields(prod, REQUIRED_FIELDS)
-        if not missing:
-            return prod
+        invalid_price_relation = has_invalid_price_relation(prod)
+
+        if not missing and not invalid_price_relation:
+            return sanitize_price_relation(prod)
 
         wait = (PRODUCT_RETRY_BASE_SECONDS * (2 ** (attempt - 1))) + random.uniform(0.0, 0.8)
         wait = min(wait, 18.0)
 
-        print(f"⚠️ Producto incompleto (intento {attempt}/{PRODUCT_MAX_RETRIES}). Faltan: {missing}. Reintento en {wait:.1f}s")
+        if invalid_price_relation:
+            print(
+                f"⚠️ Relación de precios inválida (intento {attempt}/{PRODUCT_MAX_RETRIES}). "
+                f"ANTES={prod.get('old_price')} | AHORA={prod.get('price')}. "
+                f"Reintentando en {wait:.1f}s"
+            )
+        else:
+            print(
+                f"⚠️ Producto incompleto (intento {attempt}/{PRODUCT_MAX_RETRIES}). "
+                f"Faltan: {missing}. Reintento en {wait:.1f}s"
+            )
+
         await asyncio.sleep(wait)
 
-    print("❌ No se pudo obtener producto completo tras reintentos.")
-    return last_product
+    print("❌ No se pudo obtener producto completamente válido tras reintentos.")
+    return sanitize_price_relation(last_product)
 
 
 # ==============================
@@ -817,6 +881,8 @@ async def safe_send_file(chat, file, **kwargs):
 
 
 def build_message(product, affiliate_url):
+    product = sanitize_price_relation(product)
+
     title = escape(product.get("title") or "Producto Amazon")
     rating = escape(product.get("rating") or "")
     reviews = escape(product.get("reviews") or "")
@@ -845,6 +911,7 @@ def build_message(product, affiliate_url):
 
 
 async def publish_offer(target, product, affiliate_url):
+    product = sanitize_price_relation(product)
     message = build_message(product, affiliate_url)
     img_url = product.get("image")
 
@@ -938,12 +1005,13 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.6 (sin precios en imagen) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.7 (validación de precios) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
     print(f"✅ SAFE ZONE: left={SAFE_MARGIN_LEFT}, right={SAFE_MARGIN_RIGHT}, top={SAFE_MARGIN_TOP}, bottom={SAFE_MARGIN_BOTTOM}")
     print(f"✅ PRODUCT_SCALE_BOOST={PRODUCT_SCALE_BOOST} | PRODUCT_BORDER={PRODUCT_BORDER}")
+    print("✅ Regla activa: old_price nunca puede ser menor que price")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
