@@ -51,14 +51,20 @@ OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
 
 # ==============================
 # POSICIÓN / TAMAÑO DE PRECIOS
-# Basado en tu ejemplo visual
 # ==============================
-PRICE_BLOCK_LEFT_RATIO = float(os.getenv("PRICE_BLOCK_LEFT_RATIO", "0.33"))
+PRICE_BLOCK_LEFT_RATIO = float(os.getenv("PRICE_BLOCK_LEFT_RATIO", "0.26"))
 PRICE_BLOCK_BOTTOM_RATIO = float(os.getenv("PRICE_BLOCK_BOTTOM_RATIO", "0.050"))
-PRICE_BLOCK_WIDTH_RATIO = float(os.getenv("PRICE_BLOCK_WIDTH_RATIO", "0.44"))
+PRICE_BLOCK_WIDTH_RATIO = float(os.getenv("PRICE_BLOCK_WIDTH_RATIO", "0.58"))
 PRICE_LINE_GAP_RATIO = float(os.getenv("PRICE_LINE_GAP_RATIO", "0.004"))
 PRICE_LABEL_VALUE_GAP_RATIO = float(os.getenv("PRICE_LABEL_VALUE_GAP_RATIO", "0.022"))
 PRICE_INLINE_GAP_RATIO = float(os.getenv("PRICE_INLINE_GAP_RATIO", "0.030"))
+
+# Tamaños fáciles de tocar
+PRICE_BASE_LABEL_SIZE = int(os.getenv("PRICE_BASE_LABEL_SIZE", "100"))
+PRICE_BASE_VALUE_SIZE = int(os.getenv("PRICE_BASE_VALUE_SIZE", "110"))
+PRICE_MIN_LABEL_SIZE = int(os.getenv("PRICE_MIN_LABEL_SIZE", "40"))
+PRICE_MIN_VALUE_SIZE = int(os.getenv("PRICE_MIN_VALUE_SIZE", "48"))
+PRICE_SHRINK_FACTOR = float(os.getenv("PRICE_SHRINK_FACTOR", "0.98"))
 
 PRICE_LABEL_COLOR = tuple(map(int, os.getenv("PRICE_LABEL_COLOR", "0,0,0,255").split(",")))
 PRICE_OLD_COLOR = tuple(map(int, os.getenv("PRICE_OLD_COLOR", "220,25,25,255").split(",")))
@@ -838,17 +844,17 @@ def draw_price_with_strike(draw, x, y, text, font, color, stroke_fill, stroke_wi
 
 
 def fit_price_fonts(draw, max_width, old_price, now_price):
-    label_size = 100
-    value_size = 110
+    label_size = PRICE_BASE_LABEL_SIZE
+    value_size = PRICE_BASE_VALUE_SIZE
 
     while True:
         label_font = get_font(label_size, bold=True)
         value_font = get_font(value_size, bold=True)
 
-        old_label_w, old_label_h = text_size(draw, "ANTES", label_font)
-        now_label_w, now_label_h = text_size(draw, "AHORA", label_font)
-        old_value_w, old_value_h = text_size(draw, old_price or "", value_font)
-        now_value_w, now_value_h = text_size(draw, now_price or "", value_font)
+        old_label_w, _ = text_size(draw, "ANTES", label_font)
+        now_label_w, _ = text_size(draw, "AHORA", label_font)
+        old_value_w, _ = text_size(draw, old_price or "", value_font)
+        now_value_w, _ = text_size(draw, now_price or "", value_font)
 
         gap_inline = max(12, int(max_width * PRICE_INLINE_GAP_RATIO))
         line1_w = old_label_w + gap_inline + old_value_w if old_price else 0
@@ -857,10 +863,10 @@ def fit_price_fonts(draw, max_width, old_price, now_price):
         if max(line1_w, line2_w, 1) <= max_width:
             return label_font, value_font
 
-        label_size = max(20, int(label_size * 0.95))
-        value_size = max(24, int(value_size * 0.95))
+        label_size = max(PRICE_MIN_LABEL_SIZE, int(label_size * PRICE_SHRINK_FACTOR))
+        value_size = max(PRICE_MIN_VALUE_SIZE, int(value_size * PRICE_SHRINK_FACTOR))
 
-        if label_size <= 20 and value_size <= 24:
+        if label_size <= PRICE_MIN_LABEL_SIZE and value_size <= PRICE_MIN_VALUE_SIZE:
             return label_font, value_font
 
 
@@ -966,179 +972,3 @@ def compose_product_on_template(product_img, product):
         final_product = product_scaled
     else:
         final_product = fit_image_inside_box(product_scaled, usable_width, usable_height)
-
-    canvas = Image.new("RGB", template.size, OUTPUT_BG_COLOR)
-    canvas.paste(template, (0, 0))
-
-    x = usable_left + (usable_width - final_product.width) // 2
-    y = usable_top + (usable_height - final_product.height) // 2
-    canvas.paste(final_product, (x, y))
-
-    canvas = draw_prices_on_template(canvas, product)
-    return canvas
-
-
-# ==============================
-# ENVÍO A TELEGRAM
-# ==============================
-async def safe_send_message(chat, text, **kwargs):
-    while True:
-        try:
-            return await client.send_message(chat, text, **kwargs)
-        except FloodWaitError as e:
-            print(f"⏳ FloodWait send_message: {e.seconds}s")
-            await asyncio.sleep(e.seconds + 1)
-
-
-async def safe_send_file(chat, file, **kwargs):
-    while True:
-        try:
-            return await client.send_file(chat, file, **kwargs)
-        except FloodWaitError as e:
-            print(f"⏳ FloodWait send_file: {e.seconds}s")
-            await asyncio.sleep(e.seconds + 1)
-
-
-def build_message(product, affiliate_url):
-    title = escape(product.get("title") or "Producto Amazon")
-    rating = escape(product.get("rating") or "")
-    reviews = escape(product.get("reviews") or "")
-    price = escape((product.get("price") or "").replace(",,", ","))
-    old_price = escape(product.get("old_price") or "")
-
-    lines = [
-        "🔥🔥🔥 <b>OFERTA AMAZON</b> 🔥🔥🔥",
-        f"<b>{title}</b>",
-    ]
-
-    if rating and reviews:
-        lines.append(f"⭐ {rating} · {reviews}")
-    elif rating:
-        lines.append(f"⭐ {rating}")
-    elif reviews:
-        lines.append(f"🗳️ {reviews}")
-
-    if price and old_price:
-        lines.append(f"🟢 <b>AHORA {price}</b> 🔴 <s>ANTES: {old_price}</s>")
-    elif price:
-        lines.append(f"🟢 <b>AHORA {price}</b>")
-
-    lines.append(f"🔰 {escape(affiliate_url)}")
-    return "\n".join(lines)
-
-
-async def publish_offer(target, product, affiliate_url):
-    message = build_message(product, affiliate_url)
-    img_url = product.get("image")
-
-    if not img_url:
-        await safe_send_message(target, message, parse_mode="html")
-        return True
-
-    try:
-        resp = http.get(img_url, headers=get_random_headers(), timeout=20)
-        content_type = resp.headers.get("content-type", "")
-        if not content_type.startswith("image/"):
-            raise ValueError(f"Contenido no imagen: {content_type}")
-
-        product_img = Image.open(BytesIO(resp.content)).convert("RGB")
-        final_img = compose_product_on_template(product_img, product)
-
-        bio = BytesIO()
-        bio.name = "product_template.jpg"
-        final_img.save(bio, "JPEG", quality=OUTPUT_QUALITY)
-        bio.seek(0)
-
-        await safe_send_file(target, bio, caption=message, parse_mode="html")
-        return True
-    except Exception as e:
-        print(f"Error publicando imagen: {e}")
-        await safe_send_message(target, message, parse_mode="html")
-        return True
-
-
-# ==============================
-# HANDLERS
-# ==============================
-async def process_source_message(event):
-    text = event.raw_text or ""
-    links = re.findall(r'(https?://\S+)', text)
-    if not links:
-        return
-
-    amazon_link = None
-    for link in links:
-        if "amzn.to" in link or "amazon.es" in link:
-            amazon_link = link
-            break
-
-    if not amazon_link:
-        return
-
-    await safe_send_message(target_channel, amazon_link)
-
-    asin = resolve_amazon_link(amazon_link)
-    if not asin:
-        print(f"❌ No se pudo resolver ASIN desde enlace source: {amazon_link}")
-        return
-
-    affiliate_url = build_affiliate_url(asin)
-    product = await fetch_product_complete(asin)
-
-    if not product:
-        await safe_send_message(target_channel, f"🔰 {affiliate_url}", parse_mode="html")
-        return
-
-    await publish_offer(target_channel, product, affiliate_url)
-    print("✅ Oferta procesada desde source.")
-
-
-async def process_target_message(event):
-    text = (event.raw_text or "").strip()
-    if not re.match(r'^https?://\S+$', text):
-        return
-
-    asin = resolve_amazon_link(text)
-    if not asin:
-        print(f"❌ No se pudo resolver ASIN desde enlace target: {text}")
-        return
-
-    await event.delete()
-
-    affiliate_url = build_affiliate_url(asin)
-    product = await fetch_product_complete(asin)
-
-    if not product:
-        await safe_send_message(target_channel, f"🔰 {affiliate_url}", parse_mode="html")
-        return
-
-    await publish_offer(target_channel, product, affiliate_url)
-    print("🎉 Paste con oferta completa OK")
-
-
-# ==============================
-# MAIN
-# ==============================
-async def main():
-    await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.4 (precios estilo ejemplo) ACTIVADO ✅")
-    print(f"✅ {source_channel} → {target_channel}")
-    print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
-    print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
-    print(f"✅ SAFE ZONE: left={SAFE_MARGIN_LEFT}, right={SAFE_MARGIN_RIGHT}, top={SAFE_MARGIN_TOP}, bottom={SAFE_MARGIN_BOTTOM}")
-    print(f"✅ PRODUCT_SCALE_BOOST={PRODUCT_SCALE_BOOST} | PRODUCT_BORDER={PRODUCT_BORDER}")
-    print(f"✅ PRICE TEXT AREA: left={PRICE_BLOCK_LEFT_RATIO}, bottom={PRICE_BLOCK_BOTTOM_RATIO}, width={PRICE_BLOCK_WIDTH_RATIO}")
-
-    @client.on(events.NewMessage(chats=source_channel))
-    async def handler_source(event):
-        await process_source_message(event)
-
-    @client.on(events.NewMessage(chats=target_channel))
-    async def handler_target(event):
-        await process_target_message(event)
-
-    await client.run_until_disconnected()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
