@@ -12,7 +12,7 @@ from html import escape
 from bs4 import BeautifulSoup
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from PIL import Image, ImageOps
+from PIL import Image
 from io import BytesIO
 
 # ==============================
@@ -37,20 +37,22 @@ PAAPI_MIN_INTERVAL_SECONDS = float(os.getenv("PAAPI_MIN_INTERVAL_SECONDS", "1.1"
 # Plantilla
 TEMPLATE_IMAGE_PATH = os.getenv("TEMPLATE_IMAGE_PATH", "plantilla.jpg")
 
-# Zona segura dentro de la plantilla para no tapar "solochollos10" ni el zorro
+# Zona segura para no tapar el logo superior ni el zorro inferior derecho
 SAFE_MARGIN_LEFT = int(os.getenv("SAFE_MARGIN_LEFT", "35"))
 SAFE_MARGIN_RIGHT = int(os.getenv("SAFE_MARGIN_RIGHT", "35"))
 SAFE_MARGIN_TOP = int(os.getenv("SAFE_MARGIN_TOP", "125"))
 SAFE_MARGIN_BOTTOM = int(os.getenv("SAFE_MARGIN_BOTTOM", "135"))
 
-# Márgenes internos extra de la imagen de producto dentro de la zona segura
-PRODUCT_INNER_PADDING = int(os.getenv("PRODUCT_INNER_PADDING", "12"))
+# Espacio interior de respiración
+PRODUCT_INNER_PADDING = int(os.getenv("PRODUCT_INNER_PADDING", "8"))
 
-# Borde de la imagen del producto
-PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "8"))
-PRODUCT_BORDER_COLOR = tuple(map(int, os.getenv("PRODUCT_BORDER_COLOR", "255,165,0").split(",")))
+# Escala extra del producto dentro del hueco
+PRODUCT_SCALE_BOOST = float(os.getenv("PRODUCT_SCALE_BOOST", "1.15"))
 
-# Fondo y exportación
+# Sin marco naranja
+PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "0"))
+
+# Exportación
 OUTPUT_BG_COLOR = tuple(map(int, os.getenv("OUTPUT_BG_COLOR", "255,255,255").split(",")))
 OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
 
@@ -490,6 +492,12 @@ def fit_image_inside_box(img, max_w, max_h):
     return img.resize((new_w, new_h), get_resample_filter())
 
 
+def scale_image(img, factor):
+    new_w = max(1, int(img.width * factor))
+    new_h = max(1, int(img.height * factor))
+    return img.resize((new_w, new_h), get_resample_filter())
+
+
 def compose_product_on_template(product_img):
     template = open_template_image()
     product_img = product_img.convert("RGB")
@@ -503,20 +511,20 @@ def compose_product_on_template(product_img):
     usable_height = usable_bottom - usable_top
 
     product_fitted = fit_image_inside_box(product_img, usable_width, usable_height)
+    product_scaled = scale_image(product_fitted, PRODUCT_SCALE_BOOST)
 
-    if PRODUCT_BORDER > 0:
-        product_fitted = ImageOps.expand(product_fitted, border=PRODUCT_BORDER, fill=PRODUCT_BORDER_COLOR)
-
-    if product_fitted.width > usable_width or product_fitted.height > usable_height:
-        product_fitted = fit_image_inside_box(product_fitted, usable_width, usable_height)
+    if product_scaled.width <= usable_width and product_scaled.height <= usable_height:
+        final_product = product_scaled
+    else:
+        final_product = fit_image_inside_box(product_scaled, usable_width, usable_height)
 
     canvas = Image.new("RGB", template.size, OUTPUT_BG_COLOR)
     canvas.paste(template, (0, 0))
 
-    x = usable_left + (usable_width - product_fitted.width) // 2
-    y = usable_top + (usable_height - product_fitted.height) // 2
+    x = usable_left + (usable_width - final_product.width) // 2
+    y = usable_top + (usable_height - final_product.height) // 2
 
-    canvas.paste(product_fitted, (x, y))
+    canvas.paste(final_product, (x, y))
     return canvas
 
 
@@ -683,11 +691,12 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v2.9 (producto centrado dentro de plantilla) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.0 (producto +15% y sin marco) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
     print(f"✅ SAFE ZONE: left={SAFE_MARGIN_LEFT}, right={SAFE_MARGIN_RIGHT}, top={SAFE_MARGIN_TOP}, bottom={SAFE_MARGIN_BOTTOM}")
+    print(f"✅ PRODUCT_SCALE_BOOST={PRODUCT_SCALE_BOOST} | PRODUCT_BORDER={PRODUCT_BORDER}")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
