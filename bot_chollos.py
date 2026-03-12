@@ -34,15 +34,25 @@ PRODUCT_RETRY_BASE_SECONDS = float(os.getenv("PRODUCT_RETRY_BASE_SECONDS", "2.0"
 REQUIRED_FIELDS = [x.strip() for x in os.getenv("REQUIRED_FIELDS", "title,price,image").split(",") if x.strip()]
 PAAPI_MIN_INTERVAL_SECONDS = float(os.getenv("PAAPI_MIN_INTERVAL_SECONDS", "1.1"))
 
+# Plantilla
 TEMPLATE_IMAGE_PATH = os.getenv("TEMPLATE_IMAGE_PATH", "plantilla.jpg")
-PRODUCT_MAX_SIZE = int(os.getenv("PRODUCT_MAX_SIZE", "1280"))
-PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "10"))
+
+# Zona segura dentro de la plantilla para no tapar "solochollos10" ni el zorro
+SAFE_MARGIN_LEFT = int(os.getenv("SAFE_MARGIN_LEFT", "35"))
+SAFE_MARGIN_RIGHT = int(os.getenv("SAFE_MARGIN_RIGHT", "35"))
+SAFE_MARGIN_TOP = int(os.getenv("SAFE_MARGIN_TOP", "125"))
+SAFE_MARGIN_BOTTOM = int(os.getenv("SAFE_MARGIN_BOTTOM", "135"))
+
+# Márgenes internos extra de la imagen de producto dentro de la zona segura
+PRODUCT_INNER_PADDING = int(os.getenv("PRODUCT_INNER_PADDING", "12"))
+
+# Borde de la imagen del producto
+PRODUCT_BORDER = int(os.getenv("PRODUCT_BORDER", "8"))
 PRODUCT_BORDER_COLOR = tuple(map(int, os.getenv("PRODUCT_BORDER_COLOR", "255,165,0").split(",")))
-CANVAS_BG_COLOR = tuple(map(int, os.getenv("CANVAS_BG_COLOR", "255,255,255").split(",")))
-TEMPLATE_MARGIN_TOP = int(os.getenv("TEMPLATE_MARGIN_TOP", "0"))
-TEMPLATE_SIDE_PADDING = int(os.getenv("TEMPLATE_SIDE_PADDING", "0"))
-TEMPLATE_BOTTOM_PADDING = int(os.getenv("TEMPLATE_BOTTOM_PADDING", "0"))
-UPSCALE_TEMPLATE_TO_PRODUCT = os.getenv("UPSCALE_TEMPLATE_TO_PRODUCT", "true").lower() == "true"
+
+# Fondo y exportación
+OUTPUT_BG_COLOR = tuple(map(int, os.getenv("OUTPUT_BG_COLOR", "255,255,255").split(",")))
+OUTPUT_QUALITY = int(os.getenv("OUTPUT_QUALITY", "95"))
 
 client = TelegramClient("session_bot_chollos", api_id, api_hash)
 
@@ -217,6 +227,7 @@ def paapi_get_product_sync(asin):
 
     canonical_uri = "/paapi5/getitems"
     canonical_querystring = ""
+
     canonical_headers = (
         "content-encoding:amz-1.0\n"
         "content-type:application/json; charset=utf-8\n"
@@ -277,7 +288,7 @@ def paapi_get_product_sync(asin):
 
         item = items[0]
         title = (((item.get("ItemInfo") or {}).get("Title") or {}).get("DisplayValue")) or None
-        img_url = (((((item.get("Images") or {}).get("Primary") or {}).get("Large") or {}).get("URL")) or None)
+        img_url = (((((item.get("Images") or {}).get("Primary") or {}).get("Large") or {}).get("URL"))) or None
 
         price = None
         old_price = None
@@ -297,7 +308,7 @@ def paapi_get_product_sync(asin):
             "old_price": old_price,
             "rating": rating,
             "reviews": reviews_text,
-            "image": img_url,
+            "image": img_url
         }
     except Exception as e:
         print(f"Error PAAPI: {e}")
@@ -405,7 +416,7 @@ def scrape_amazon_product_html_sync(asin):
             "old_price": old_price,
             "rating": rating,
             "reviews": reviews_text,
-            "image": img_url,
+            "image": img_url
         }
     except Exception as e:
         print("Error scraping HTML:", e)
@@ -446,13 +457,13 @@ async def fetch_product_complete(asin):
         await asyncio.sleep(wait)
 
     print("❌ No se pudo obtener producto completo tras reintentos.")
-    return last_product
+    return None
 
 
 # ==============================
-# IMAGEN FINAL: PRODUCTO + PLANTILLA
+# IMAGEN FINAL DENTRO DE PLANTILLA
 # ==============================
-def _resample_filter():
+def get_resample_filter():
     try:
         return Image.Resampling.LANCZOS
     except AttributeError:
@@ -462,65 +473,50 @@ def _resample_filter():
             return Image.BICUBIC
 
 
-def open_local_template():
+def open_template_image():
     if not os.path.exists(TEMPLATE_IMAGE_PATH):
         raise FileNotFoundError(f"No existe la plantilla: {TEMPLATE_IMAGE_PATH}")
     return Image.open(TEMPLATE_IMAGE_PATH).convert("RGB")
 
 
-def prepare_product_image(img):
-    img = img.convert("RGB")
+def fit_image_inside_box(img, max_w, max_h):
+    if max_w <= 0 or max_h <= 0:
+        raise ValueError("La zona segura de la plantilla no es válida.")
 
-    max_size = (PRODUCT_MAX_SIZE, PRODUCT_MAX_SIZE)
-    img.thumbnail(max_size, _resample_filter())
+    img = img.convert("RGB")
+    ratio = min(max_w / img.width, max_h / img.height)
+    new_w = max(1, int(img.width * ratio))
+    new_h = max(1, int(img.height * ratio))
+    return img.resize((new_w, new_h), get_resample_filter())
+
+
+def compose_product_on_template(product_img):
+    template = open_template_image()
+    product_img = product_img.convert("RGB")
+
+    usable_left = SAFE_MARGIN_LEFT + PRODUCT_INNER_PADDING
+    usable_top = SAFE_MARGIN_TOP + PRODUCT_INNER_PADDING
+    usable_right = template.width - SAFE_MARGIN_RIGHT - PRODUCT_INNER_PADDING
+    usable_bottom = template.height - SAFE_MARGIN_BOTTOM - PRODUCT_INNER_PADDING
+
+    usable_width = usable_right - usable_left
+    usable_height = usable_bottom - usable_top
+
+    product_fitted = fit_image_inside_box(product_img, usable_width, usable_height)
 
     if PRODUCT_BORDER > 0:
-        img = ImageOps.expand(img, border=PRODUCT_BORDER, fill=PRODUCT_BORDER_COLOR)
+        product_fitted = ImageOps.expand(product_fitted, border=PRODUCT_BORDER, fill=PRODUCT_BORDER_COLOR)
 
-    return img
+    if product_fitted.width > usable_width or product_fitted.height > usable_height:
+        product_fitted = fit_image_inside_box(product_fitted, usable_width, usable_height)
 
+    canvas = Image.new("RGB", template.size, OUTPUT_BG_COLOR)
+    canvas.paste(template, (0, 0))
 
-def resize_template_to_width(template_img, target_width):
-    if TEMPLATE_SIDE_PADDING * 2 >= target_width:
-        usable_width = target_width
-    else:
-        usable_width = target_width - (TEMPLATE_SIDE_PADDING * 2)
+    x = usable_left + (usable_width - product_fitted.width) // 2
+    y = usable_top + (usable_height - product_fitted.height) // 2
 
-    if usable_width <= 0:
-        usable_width = target_width
-
-    if template_img.width == usable_width:
-        return template_img
-
-    if template_img.width < usable_width and not UPSCALE_TEMPLATE_TO_PRODUCT:
-        return template_img
-
-    new_height = int(template_img.height * (usable_width / template_img.width))
-    return template_img.resize((usable_width, new_height), _resample_filter())
-
-
-def compose_offer_image(product_img):
-    product_img = prepare_product_image(product_img)
-    template_img = open_local_template()
-    template_img = resize_template_to_width(template_img, product_img.width)
-
-    canvas_width = max(product_img.width, template_img.width + (TEMPLATE_SIDE_PADDING * 2))
-    canvas_height = (
-        product_img.height
-        + TEMPLATE_MARGIN_TOP
-        + template_img.height
-        + TEMPLATE_BOTTOM_PADDING
-    )
-
-    canvas = Image.new("RGB", (canvas_width, canvas_height), CANVAS_BG_COLOR)
-
-    product_x = (canvas_width - product_img.width) // 2
-    template_x = (canvas_width - template_img.width) // 2
-    template_y = product_img.height + TEMPLATE_MARGIN_TOP
-
-    canvas.paste(product_img, (product_x, 0))
-    canvas.paste(template_img, (template_x, template_y))
-
+    canvas.paste(product_fitted, (x, y))
     return canvas
 
 
@@ -588,11 +584,11 @@ async def publish_offer(target, product, affiliate_url):
             raise ValueError(f"Contenido no imagen: {content_type}")
 
         product_img = Image.open(BytesIO(resp.content)).convert("RGB")
-        final_img = compose_offer_image(product_img)
+        final_img = compose_product_on_template(product_img)
 
         bio = BytesIO()
-        bio.name = "product_with_template.jpg"
-        final_img.save(bio, "JPEG", quality=95)
+        bio.name = "product_template.jpg"
+        final_img.save(bio, "JPEG", quality=OUTPUT_QUALITY)
         bio.seek(0)
 
         await safe_send_file(target, bio, caption=message, parse_mode="html")
@@ -607,7 +603,7 @@ async def publish_offer(target, product, affiliate_url):
 # ==============================
 async def process_source_message(event):
     text = event.raw_text or ""
-    links = re.findall(r"(https?://\S+)", text)
+    links = re.findall(r'(https?://\S+)', text)
     if not links:
         return
 
@@ -650,7 +646,7 @@ async def process_source_message(event):
 
 async def process_target_message(event):
     text = (event.raw_text or "").strip()
-    if not re.match(r"^https?://\S+$", text):
+    if not re.match(r'^https?://\S+$', text):
         return
 
     asin = resolve_amazon_link(text)
@@ -687,10 +683,11 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v2.8 (plantilla inferior en imagen) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v2.9 (producto centrado dentro de plantilla) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
+    print(f"✅ SAFE ZONE: left={SAFE_MARGIN_LEFT}, right={SAFE_MARGIN_RIGHT}, top={SAFE_MARGIN_TOP}, bottom={SAFE_MARGIN_BOTTOM}")
 
     @client.on(events.NewMessage(chats=source_channel))
     async def handler_source(event):
