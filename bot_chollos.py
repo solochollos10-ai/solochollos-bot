@@ -80,17 +80,22 @@ def clean_text(text):
 def normalize_price(text):
     if not text:
         return None
-    text = clean_text(text).replace("€", "").replace("\u202f", " ").replace("\xa0", " ")
-    text = text.replace("EUR", "").strip()
+
+    text = clean_text(text)
+    text = text.replace("€", "").replace("EUR", "").replace("\u202f", " ").replace("\xa0", " ").strip()
+
     m = re.search(r"(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:,\d{2})|\d+(?:\.\d{2}))", text)
     if not m:
         return None
+
     value = m.group(1).replace(" ", "")
+
     if "," in value:
         value = value.replace(".", "").replace(",", ".")
     else:
         if value.count(".") > 1:
             value = value.replace(".", "")
+
     try:
         return f"{float(value):.2f}€".replace(".", ",")
     except Exception:
@@ -145,21 +150,51 @@ def first_price_from_selectors(soup, selectors):
 def price_from_whole_fraction(container):
     if not container:
         return None
+
     whole = container.select_one(".a-price-whole")
     frac = container.select_one(".a-price-fraction")
     if whole and frac:
         txt = f"{clean_text(whole.get_text())},{clean_text(frac.get_text())}"
-        return normalize_price(txt)
+        price = normalize_price(txt)
+        if price:
+            return price
+
     offscreen = container.select_one(".a-offscreen")
     if offscreen:
-        return normalize_price(offscreen.get_text(" ", strip=True))
+        price = normalize_price(offscreen.get_text(" ", strip=True))
+        if price:
+            return price
+
+    text = clean_text(container.get_text(" ", strip=True))
+    return normalize_price(text)
+
+
+def price_from_json_ld(soup):
+    scripts = soup.select('script[type="application/ld+json"]')
+    for script in scripts:
+        raw = (script.string or script.get_text() or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+            candidates = data if isinstance(data, list) else [data]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                offers = item.get("offers")
+                if isinstance(offers, dict):
+                    price = offers.get("price") or offers.get("lowPrice")
+                    normalized = normalize_price(str(price)) if price else None
+                    if normalized:
+                        return normalized
+        except Exception:
+            continue
     return None
 
 
 def extract_now_price(soup):
     direct_selectors = [
         "#corePriceDisplay_desktop_feature_div .priceToPay .a-offscreen",
-        "#corePriceDisplay_desktop_feature_div .priceToPay span.a-offscreen",
         "#corePriceDisplay_desktop_feature_div .reinventPricePriceToPayMargin .a-offscreen",
         "#corePriceDisplay_desktop_feature_div .a-price.aok-align-center .a-offscreen",
         "#corePrice_feature_div .priceToPay .a-offscreen",
@@ -170,15 +205,14 @@ def extract_now_price(soup):
         ".apexPriceToPay .a-offscreen",
         ".priceToPay .a-offscreen",
         ".reinventPricePriceToPayMargin .a-offscreen",
-        ".a-price.aok-align-center.reinventPricePriceToPayMargin .a-offscreen",
         "#priceblock_dealprice",
         "#priceblock_ourprice",
         "#price_inside_buybox",
         "input#attach-base-product-price",
-        "span[data-a-size='xl'] .a-offscreen",
         "span[data-a-color='price'] .a-offscreen",
-        "span[data-a-color='base'] .a-offscreen",
+        "span[data-a-size='xl'] .a-offscreen",
     ]
+
     price = first_price_from_selectors(soup, direct_selectors)
     if price:
         return price
@@ -192,7 +226,9 @@ def extract_now_price(soup):
         "#apex_desktop .a-price",
         ".priceToPay",
         ".apex-pricetopay-value",
+        ".a-price",
     ]
+
     for selector in block_selectors:
         container = soup.select_one(selector)
         price = price_from_whole_fraction(container)
@@ -205,12 +241,18 @@ def extract_now_price(soup):
         if price:
             return price
 
+    price = price_from_json_ld(soup)
+    if price:
+        return price
+
     page_text = clean_text(soup.get_text(" ", strip=True))
     patterns = [
         r"(\d{1,3}(?:\.\d{3})*,\d{2})\s*€\s*con un ahorro",
         r"Oferta de Primavera.*?(\d{1,3}(?:\.\d{3})*,\d{2})\s*€",
         r"Compra única.*?(\d{1,3}(?:\.\d{3})*,\d{2})\s*€",
+        r"Precio:\s*(\d{1,3}(?:\.\d{3})*,\d{2})\s*€",
     ]
+
     for pattern in patterns:
         m = re.search(pattern, page_text, re.I)
         if m:
@@ -231,6 +273,7 @@ def extract_old_price(soup):
         ".basisPrice .a-offscreen",
         ".a-text-price .a-offscreen",
     ]
+
     price = first_price_from_selectors(soup, direct_selectors)
     if price:
         return price
@@ -241,6 +284,7 @@ def extract_old_price(soup):
         r"Precio mediano:?\s*(\d{1,3}(?:\.\d{3})*,\d{2})\s*€",
         r"El precio más bajo de los últimos 30 días:?\s*(\d{1,3}(?:\.\d{3})*,\d{2})\s*€",
     ]
+
     for pattern in patterns:
         m = re.search(pattern, page_text, re.I)
         if m:
@@ -258,17 +302,59 @@ def extract_rating(soup):
             "#averageCustomerReviews_feature_div .a-icon-alt",
             "#acrPopover .a-size-base.a-color-base",
         ])
-    return normalize_rating(txt)
+
+    if txt:
+        return normalize_rating(txt)
+
+    scripts = soup.select('script[type="application/ld+json"]')
+    for script in scripts:
+        raw = (script.string or script.get_text() or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+            candidates = data if isinstance(data, list) else [data]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                agg = item.get("aggregateRating")
+                if isinstance(agg, dict) and agg.get("ratingValue"):
+                    return normalize_rating(str(agg.get("ratingValue")))
+        except Exception:
+            continue
+
+    return None
 
 
 def extract_reviews_text(soup):
     txt = first_text(soup, ["#acrCustomerReviewText"])
     count = normalize_reviews_count(txt)
-    return f"{count} opiniones" if count else ""
+    if count:
+        return f"{count} opiniones"
+
+    scripts = soup.select('script[type="application/ld+json"]')
+    for script in scripts:
+        raw = (script.string or script.get_text() or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+            candidates = data if isinstance(data, list) else [data]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                agg = item.get("aggregateRating")
+                if isinstance(agg, dict) and agg.get("ratingCount"):
+                    return f"{normalize_reviews_count(str(agg.get('ratingCount')))} opiniones"
+        except Exception:
+            continue
+
+    return ""
 
 
 def extract_image_url(soup):
     img_url = None
+
     landing = soup.select_one("#landingImage")
     if landing:
         img_url = landing.get("data-old-hires") or landing.get("data-a-hires") or landing.get("src")
@@ -288,6 +374,26 @@ def extract_image_url(soup):
         if og_img:
             img_url = og_img.get("content")
 
+    if not img_url:
+        scripts = soup.select('script[type="application/ld+json"]')
+        for script in scripts:
+            raw = (script.string or script.get_text() or "").strip()
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+                candidates = data if isinstance(data, list) else [data]
+                for item in candidates:
+                    if not isinstance(item, dict):
+                        continue
+                    image = item.get("image")
+                    if isinstance(image, str):
+                        return image
+                    if isinstance(image, list) and image:
+                        return image[0]
+            except Exception:
+                continue
+
     return img_url
 
 
@@ -299,6 +405,64 @@ def merge_products(primary, fallback):
     for key in keys:
         merged[key] = primary.get(key) or fallback.get(key)
     return merged
+
+
+# ==============================
+# AMAZON: RESOLUCIÓN DE ENLACES
+# ==============================
+def extract_asin(url):
+    url = (url or "").split("?")[0].strip()
+
+    patterns = [
+        r"/dp/([A-Z0-9]{10})",
+        r"/gp/product/([A-Z0-9]{10})",
+        r"/product/([A-Z0-9]{10})",
+        r"/ASIN/([A-Z0-9]{10})",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, url, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+
+    direct = re.search(r"\b([A-Z0-9]{10})\b", url, re.IGNORECASE)
+    if direct:
+        return direct.group(1).upper()
+
+    return None
+
+
+def resolve_amazon_link(url):
+    try:
+        current = (url or "").strip()
+
+        asin_here = extract_asin(current)
+        if asin_here:
+            return asin_here
+
+        r = http.get(current, headers=get_random_headers(), allow_redirects=True, timeout=15)
+        final_url = str(r.url).split("?")[0]
+        asin_final = extract_asin(final_url)
+        if asin_final:
+            return asin_final
+
+        loc = r.headers.get("Location")
+        if loc:
+            if loc.startswith("/"):
+                loc = "https://www.amazon.es" + loc
+            elif not loc.startswith("http"):
+                loc = "https://" + loc.lstrip("/")
+            return extract_asin(loc)
+
+        return None
+
+    except Exception as e:
+        print(f"Error resolviendo enlace: {e}")
+        return None
+
+
+def build_affiliate_url(asin):
+    return f"https://www.amazon.es/dp/{asin}/?tag={affiliate_tag}"
 
 
 # ==============================
@@ -331,6 +495,7 @@ def paapi_get_product_sync(asin):
 
     if PAAPI_DISABLED:
         return None
+
     if not (paapi_access_key and paapi_secret_key and affiliate_tag):
         return None
 
@@ -447,6 +612,7 @@ def paapi_get_product_sync(asin):
             "reviews": reviews_text,
             "image": img_url
         }
+
     except Exception as e:
         print(f"Error PAAPI: {e}")
         return None
@@ -454,8 +620,10 @@ def paapi_get_product_sync(asin):
 
 async def paapi_get_product_throttled(asin):
     global _paapi_last_call
+
     if PAAPI_DISABLED:
         return None
+
     if not (paapi_access_key and paapi_secret_key and affiliate_tag):
         return None
 
@@ -472,8 +640,7 @@ async def paapi_get_product_throttled(asin):
 # ==============================
 # AMAZON HTML SCRAPING
 # ==============================
-def scrape_amazon_product_html_sync(asin):
-    url = f"https://www.amazon.es/dp/{asin}"
+def scrape_amazon_page_sync(url):
     try:
         r = http.get(url, headers=get_random_headers(), timeout=18)
         if ("captcha" in r.text.lower()) or ("validateCaptcha" in r.text):
@@ -503,8 +670,26 @@ def scrape_amazon_product_html_sync(asin):
             "image": img_url
         }
     except Exception as e:
-        print("Error scraping HTML:", e)
+        print(f"Error scraping HTML en {url}: {e}")
         return None
+
+
+def scrape_amazon_product_html_sync(asin):
+    urls = [
+        f"https://www.amazon.es/dp/{asin}",
+        f"https://www.amazon.es/dp/{asin}?th=1&psc=1&language=es_ES",
+        f"https://www.amazon.es/gp/product/{asin}?language=es_ES",
+    ]
+
+    merged = {}
+    for url in urls:
+        data = scrape_amazon_page_sync(url)
+        merged = merge_products(merged, data)
+
+        if merged.get("title") and merged.get("price") and merged.get("image"):
+            break
+
+    return merged if merged else None
 
 
 async def fetch_product_once(asin):
@@ -516,11 +701,13 @@ async def fetch_product_once(asin):
 def product_missing_fields(product, required_fields):
     if not product:
         return required_fields
+
     missing = []
     for k in required_fields:
         v = product.get(k)
         if v is None or (isinstance(v, str) and not v.strip()):
             missing.append(k)
+
     return missing
 
 
@@ -535,13 +722,10 @@ async def fetch_product_complete(asin):
         if not missing:
             return prod
 
-        if prod and prod.get("title") and prod.get("image") and "price" in missing:
-            print(f"⚠️ Producto parcial útil en intento {attempt}: falta precio. Reintento corto.")
-        else:
-            print(f"⚠️ Producto incompleto (intento {attempt}/{PRODUCT_MAX_RETRIES}). Faltan: {missing}.")
-
         wait = (PRODUCT_RETRY_BASE_SECONDS * (2 ** (attempt - 1))) + random.uniform(0.0, 0.8)
         wait = min(wait, 18.0)
+
+        print(f"⚠️ Producto incompleto (intento {attempt}/{PRODUCT_MAX_RETRIES}). Faltan: {missing}. Reintento en {wait:.1f}s")
         await asyncio.sleep(wait)
 
     print("❌ No se pudo obtener producto completo tras reintentos.")
@@ -570,6 +754,7 @@ def open_template_image():
 def fit_image_inside_box(img, max_w, max_h):
     if max_w <= 0 or max_h <= 0:
         raise ValueError("La zona segura de la plantilla no es válida.")
+
     img = img.convert("RGB")
     ratio = min(max_w / img.width, max_h / img.height)
     new_w = max(1, int(img.width * ratio))
@@ -664,8 +849,8 @@ def build_message(product, affiliate_url):
 
 async def publish_offer(target, product, affiliate_url):
     message = build_message(product, affiliate_url)
-
     img_url = product.get("image")
+
     if not img_url:
         await safe_send_message(target, message, parse_mode="html")
         return True
@@ -686,9 +871,11 @@ async def publish_offer(target, product, affiliate_url):
 
         await safe_send_file(target, bio, caption=message, parse_mode="html")
         return True
+
     except Exception as e:
         print(f"Error publicando imagen: {e}")
-        return False
+        await safe_send_message(target, message, parse_mode="html")
+        return True
 
 
 # ==============================
@@ -705,6 +892,7 @@ async def process_source_message(event):
         if "amzn.to" in link or "amazon.es" in link:
             amazon_link = link
             break
+
     if not amazon_link:
         return
 
@@ -712,6 +900,7 @@ async def process_source_message(event):
 
     asin = resolve_amazon_link(amazon_link)
     if not asin:
+        print(f"❌ No se pudo resolver ASIN desde enlace source: {amazon_link}")
         return
 
     affiliate_url = build_affiliate_url(asin)
@@ -721,19 +910,8 @@ async def process_source_message(event):
         await safe_send_message(target_channel, f"🔰 {affiliate_url}", parse_mode="html")
         return
 
-    for attempt in range(1, PRODUCT_MAX_RETRIES + 1):
-        ok = await publish_offer(target_channel, product, affiliate_url)
-        if ok:
-            print("✅ Oferta publicada completa (source).")
-            return
-        wait = min((PRODUCT_RETRY_BASE_SECONDS * (2 ** (attempt - 1))) + random.uniform(0.0, 1.0), 20.0)
-        print(f"⚠️ Falló envío con foto (intento {attempt}/{PRODUCT_MAX_RETRIES}). Reintento en {wait:.1f}s")
-        await asyncio.sleep(wait)
-        product = await fetch_product_complete(asin)
-        if not product:
-            break
-
-    await safe_send_message(target_channel, build_message(product, affiliate_url), parse_mode="html")
+    await publish_offer(target_channel, product, affiliate_url)
+    print("✅ Oferta procesada desde source.")
 
 
 async def process_target_message(event):
@@ -743,6 +921,7 @@ async def process_target_message(event):
 
     asin = resolve_amazon_link(text)
     if not asin:
+        print(f"❌ No se pudo resolver ASIN desde enlace target: {text}")
         return
 
     await event.delete()
@@ -754,19 +933,8 @@ async def process_target_message(event):
         await safe_send_message(target_channel, f"🔰 {affiliate_url}", parse_mode="html")
         return
 
-    for attempt in range(1, PRODUCT_MAX_RETRIES + 1):
-        ok = await publish_offer(target_channel, product, affiliate_url)
-        if ok:
-            print("🎉 Paste con oferta completa OK")
-            return
-        wait = min((PRODUCT_RETRY_BASE_SECONDS * (2 ** (attempt - 1))) + random.uniform(0.0, 1.0), 20.0)
-        print(f"⚠️ Falló envío con foto (paste) intento {attempt}/{PRODUCT_MAX_RETRIES}. Reintento en {wait:.1f}s")
-        await asyncio.sleep(wait)
-        product = await fetch_product_complete(asin)
-        if not product:
-            break
-
-    await safe_send_message(target_channel, build_message(product, affiliate_url), parse_mode="html")
+    await publish_offer(target_channel, product, affiliate_url)
+    print("🎉 Paste con oferta completa OK")
 
 
 # ==============================
@@ -774,7 +942,7 @@ async def process_target_message(event):
 # ==============================
 async def main():
     await client.start(bot_token=bot_token)
-    print("🤖 BOT CHOLLOS v3.1 (PAAPI fallback real + precios robustos) ACTIVADO ✅")
+    print("🤖 BOT CHOLLOS v3.1.1 (ASIN fix + fallback robusto) ACTIVADO ✅")
     print(f"✅ {source_channel} → {target_channel}")
     print(f"✅ REQUIRED_FIELDS={REQUIRED_FIELDS} | PRODUCT_MAX_RETRIES={PRODUCT_MAX_RETRIES}")
     print(f"✅ TEMPLATE_IMAGE_PATH={TEMPLATE_IMAGE_PATH}")
